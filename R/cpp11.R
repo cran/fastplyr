@@ -47,3 +47,11 @@ cpp_df_group_indices <- function(rows, size) {
 cpp_slice_locs <- function(group_locs, locs) {
   .Call(`_fastplyr_cpp_slice_locs`, group_locs, locs)
 }
+
+cpp_consecutive_id <- function(x) {
+  .Call(`_fastplyr_cpp_consecutive_id`, x)
+}
+
+cpp_set_list_element <- function(x, i, value) {
+  .Call(`_fastplyr_cpp_set_list_element`, x, i, value)
+}

@@ -36,6 +36,7 @@
 #' `base::min` -> `collapse::fmin` \cr
 #' `base::max` -> `collapse::fmax` \cr
 #' `stats::mean` -> `collapse::fmean` \cr
+#' `stats::median` -> `collapse::fmedian` \cr
 #' `stats::sd` -> `collapse::fsd` \cr
 #' `stats::var` -> `collapse::fvar` \cr
 #' `dplyr::first` -> `collapse::ffirst` \cr
@@ -72,7 +73,7 @@
 #' @rdname f_summarise
 #' @export
 f_summarise <- function(data, ..., .by = NULL, .optimise = TRUE){
-  base_fns <- c("sum", "prod", "mean", "min", "max", "first", "last",
+  base_fns <- c("sum", "prod", "mean", "median", "min", "max", "first", "last",
                 "sd", "var", "n_distinct", "ndistinct")
   collapse_fns <- paste0("f", base_fns)
   collapse_fns[base_fns == "n_distinct"] <- "fndistinct"
@@ -112,11 +113,15 @@ f_summarise <- function(data, ..., .by = NULL, .optimise = TRUE){
       dot_nm <- dot_label
     }
     dot_env <- rlang::quo_get_env(dot)
-    dot_args <- rlang::call_args(dot)
-    if (length(dot_args) == 0){
-      var <- character()
-    } else {
-      var <- as.character(dot_args[[1]])
+    if (rlang::quo_is_call(dot)){
+      dot_args <- rlang::call_args(dot)
+      if (length(dot_args) == 0){
+        var <- character()
+      } else {
+        var <- as.character(dot_args[[1]])
+      }
+    }  else {
+      var <- rlang::as_label(rlang::quo_get_expr(dot))
     }
     var_not_nested <- length(var) <= 1
     if (.optimise && is_n_call(dot) && var_not_nested){
@@ -253,6 +258,9 @@ f_summarise <- function(data, ..., .by = NULL, .optimise = TRUE){
       }
       grouped_df_has_been_constructed <- TRUE
       temp <- dplyr::summarise(data, !!!dots[i], .groups = "drop")
+      if (df_nrow(out) != df_nrow(temp)){
+        stop("Expressions must return exactly 1 row per `f_summarise()` group")
+      }
       out <- f_bind_cols(out, f_select(temp, .cols = setdiff(names(temp), group_vars)))
     }
   }

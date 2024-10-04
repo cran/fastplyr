@@ -17,7 +17,7 @@ df_select <- get_from_package("df_select", "cheapr")
 which <- cheapr::which_
 which_not_in <- get_from_package("which_not_in", "cheapr")
 which_in <- get_from_package("which_in", "cheapr")
-which_val <- get_from_package("which_val", "cheapr")
+cpp_int64_to_numeric <- get_from_package("cpp_int64_to_numeric", "cheapr")
 
 check_length <- function(x, size){
   if (length(x) != size){
@@ -65,8 +65,8 @@ col_select_pos <- function(data, .cols = character()){
   out
 }
 # Tidyselect col names
-col_select_names <- function(data, ..., .cols = NULL){
-  names(col_select_pos(data, ..., .cols = .cols))
+col_select_names <- function(data, .cols = NULL){
+  names(col_select_pos(data, .cols = .cols))
 }
 # (Internal) Fast col rename
 col_rename <- function(data, .cols = integer()){
