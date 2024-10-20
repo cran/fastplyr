@@ -26,8 +26,12 @@ f_bind_rows <- function(..., .fill = TRUE){
   n_dots <- length(dots)
   ncols <- cpp_ncols(dots, check_cols_equal = !.fill)
   nrows <- cpp_nrows(dots, FALSE)
+
+  if (sum(ncols) == 0){
+    return(new_tbl(.nrows = sum(nrows)))
+  }
   if (n_dots == 0){
-    new_df()
+    new_tbl()
   } else if (n_dots == 1){
     dots[[1L]]
   } else {
@@ -116,16 +120,19 @@ f_bind_cols <- function(..., .repair_names = TRUE, .recycle = TRUE, .sep = "..."
   }
   for (i in seq_along(dots)){
     if (!inherits(dots[[i]], "data.frame")){
-      dots[[i]] <- `class<-`(list_as_df(dots[i]), c("tbl_df", "tbl", "data.frame"))
+      dots[[i]] <- list_as_tbl(dots[i])
     }
   }
   nrows <- cpp_nrows(dots, check_rows_equal = !.recycle)
-  out <- unlist(unname(dots), recursive = FALSE)
+  out <- as.list(unlist(unname(dots), recursive = FALSE))
   if (.repair_names){
+    names(out) <- unique_name_repair(names(out), .sep = .sep)
     if (is.null(names(out))){
-      names(out) <- paste0(.sep, seq_along(out))
-    } else {
-      names(out) <- unique_name_repair(names(out), .sep = .sep)
+      if (length(out) == 0){
+        names(out) <- character()
+      } else {
+        names(out) <- paste0(.sep, seq_along(out))
+      }
     }
   }
   out <- list_as_df(out)
@@ -138,20 +145,7 @@ f_bind_cols <- function(..., .repair_names = TRUE, .recycle = TRUE, .sep = "..."
       attr(out, "row.names") <- .set_row_names(N)
     }
     template <- dots[[1L]]
-
-    # Special method for grouped_df because
-    # we don't need to recalculate groups
-    # Since we're not rearranging or renaming variables
-    # except in the case of duplicates.
-
-    if (inherits(template, "grouped_df") &&
-        all(group_vars(template) %in% names(out))){
-      out <- reconstruct(df_ungroup(template), out)
-      class(out) <- class(template)
-      attr(out, "groups") <- attr(template, "groups")
-    } else {
-      out <- reconstruct(template, out)
-    }
+    out <- reconstruct(template, out)
   }
   out
 }

@@ -27,7 +27,11 @@
 #' @rdname new_tbl
 #' @export
 new_tbl <- function(..., .nrows = NULL, .recycle = TRUE, .name_repair = FALSE){
-  df_as_tbl(new_df(..., .nrows = .nrows, .recycle = .recycle, .name_repair = .name_repair))
+  df_as_tbl(
+    cheapr::new_df(..., .nrows = .nrows,
+                   .recycle = .recycle,
+                   .name_repair = .name_repair)
+  )
 }
 #' @rdname new_tbl
 #' @export
@@ -86,7 +90,7 @@ as_tbl <- function(x){
     }
     non_empty <- nzchar(names(out))
     if (!all(non_empty)){
-      empty <- which(non_empty, invert = TRUE)
+      empty <- cheapr::which_(non_empty, invert = TRUE)
       names(out)[empty] <- paste0("col_", empty)
     }
   }

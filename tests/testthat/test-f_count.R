@@ -3,28 +3,20 @@ test_that("Compare to dplyr", {
   weights <- sample(1:150)
   iris[["weight"]] <- weights
   flights <- nycflights13::flights
-  # expect_equal(iris %>%
-  #                              dplyr::mutate(interval = lubridate::interval(
-  #                                Sys.Date(), Sys.Date())) %>%
-  #                              f_count(),
-  #                            iris %>%
-  #                              dplyr::mutate(interval = lubridate::interval(
-  #                                Sys.Date(), Sys.Date())) %>%
-  #                              dplyr::count())
   expect_equal(iris %>% dplyr::count(),
                              iris %>% f_count())
   expect_identical(
     iris %>%
       collapse::qDT() %>%
       f_count(),
-    collapse::qDT(new_df(n = 150L))
+    collapse::qDT(cheapr::new_df(n = 150L))
   )
   expect_identical(
     iris %>%
       collapse::qDT() %>%
       dplyr::slice(0L) %>%
       f_count(),
-    collapse::qDT(new_df(n = 0L))
+    collapse::qDT(cheapr::new_df(n = 0L))
   )
   # Unused factor levels
 

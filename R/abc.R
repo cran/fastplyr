@@ -141,34 +141,12 @@ add_names <- function(x, value){
 interval_separate <- function(x){
   start <- attr(x, "start")
   end <- start + strip_attrs(x)
-  new_df(start = start, end = end)
+  cheapr::new_df(start = start, end = end)
 }
 is_sorted <- function(x){
   isTRUE(!is.unsorted(x))
 }
 
-# first_obs <- function(x, n = 1L){
-#   check_length(n, 1)
-#   N <- NROW(x)
-#   if (n >= 0) {
-#     size <- min(n, N)
-#   }
-#   else {
-#     size <- max(0L, N + n)
-#   }
-#   cheapr::sset(x, seq_len(size))
-# }
-# last_obs <- function (x, n = 1L){
-#   check_length(n, 1)
-#   N <- NROW(x)
-#   if (n >= 0) {
-#     size <- min(n, N)
-#   }
-#   else {
-#     size <- max(0L, N + n)
-#   }
-#   cheapr::sset(x, seq.int(from = N - size + 1L, by = 1L, length.out = size))
-# }
 list_subset <- function(x, i, default = NA){
   check_length(default, 1)
   if (length(x) == 0){
@@ -179,16 +157,6 @@ list_subset <- function(x, i, default = NA){
     ptype <- first_element[0]
   }
   cpp_list_subset(x, ptype, as.integer(i), default)
-}
-
-# is_integerable <- function(x){
-#   abs(x) <= .Machine$integer.max
-# }
-all_integerable <- function(x, shift = 0){
-  all(
-    (abs(collapse::frange(x, na.rm = TRUE)) + shift ) <= .Machine$integer.max,
-    na.rm = TRUE
-  )
 }
 
 # setdiff and intersect but no deduplicating
@@ -255,3 +223,8 @@ sort_unique <- function(x, sort = FALSE){
 
 # rlang infix default NULL value function
 `%||%` <- function(x, y) if (is.null(x)) y else x
+
+# Is x a simple lgl, int, dbl, char, cplx or raw?
+is_atomic_vec <- function(x){
+  !is.object(x) && is.atomic(x) && is.vector(x)
+}

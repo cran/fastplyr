@@ -6,6 +6,13 @@
 #include <R_ext/Visibility.h>
 
 // fastplyr.cpp
+SEXP r_address(SEXP x);
+extern "C" SEXP _fastplyr_r_address(SEXP x) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(r_address(cpp11::as_cpp<cpp11::decay_t<SEXP>>(x)));
+  END_CPP11
+}
+// fastplyr.cpp
 SEXP cpp_address_equal(SEXP x, SEXP y);
 extern "C" SEXP _fastplyr_cpp_address_equal(SEXP x, SEXP y) {
   BEGIN_CPP11
@@ -97,10 +104,24 @@ extern "C" SEXP _fastplyr_cpp_consecutive_id(SEXP x) {
   END_CPP11
 }
 // fastplyr.cpp
+SEXP cpp_grouped_run_id(SEXP x, SEXP order, SEXP group_sizes);
+extern "C" SEXP _fastplyr_cpp_grouped_run_id(SEXP x, SEXP order, SEXP group_sizes) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(cpp_grouped_run_id(cpp11::as_cpp<cpp11::decay_t<SEXP>>(x), cpp11::as_cpp<cpp11::decay_t<SEXP>>(order), cpp11::as_cpp<cpp11::decay_t<SEXP>>(group_sizes)));
+  END_CPP11
+}
+// fastplyr.cpp
 SEXP cpp_set_list_element(SEXP x, R_xlen_t i, SEXP value);
 extern "C" SEXP _fastplyr_cpp_set_list_element(SEXP x, SEXP i, SEXP value) {
   BEGIN_CPP11
     return cpp11::as_sexp(cpp_set_list_element(cpp11::as_cpp<cpp11::decay_t<SEXP>>(x), cpp11::as_cpp<cpp11::decay_t<R_xlen_t>>(i), cpp11::as_cpp<cpp11::decay_t<SEXP>>(value)));
+  END_CPP11
+}
+// fastplyr.cpp
+SEXP cpp_set_replace(SEXP x, SEXP where, SEXP what);
+extern "C" SEXP _fastplyr_cpp_set_replace(SEXP x, SEXP where, SEXP what) {
+  BEGIN_CPP11
+    return cpp11::as_sexp(cpp_set_replace(cpp11::as_cpp<cpp11::decay_t<SEXP>>(x), cpp11::as_cpp<cpp11::decay_t<SEXP>>(where), cpp11::as_cpp<cpp11::decay_t<SEXP>>(what)));
   END_CPP11
 }
 
@@ -111,15 +132,18 @@ static const R_CallMethodDef CallEntries[] = {
     {"_fastplyr_cpp_consecutive_id",      (DL_FUNC) &_fastplyr_cpp_consecutive_id,      1},
     {"_fastplyr_cpp_df_group_indices",    (DL_FUNC) &_fastplyr_cpp_df_group_indices,    2},
     {"_fastplyr_cpp_group_locs",          (DL_FUNC) &_fastplyr_cpp_group_locs,          2},
+    {"_fastplyr_cpp_grouped_run_id",      (DL_FUNC) &_fastplyr_cpp_grouped_run_id,      3},
     {"_fastplyr_cpp_is_exotic",           (DL_FUNC) &_fastplyr_cpp_is_exotic,           1},
     {"_fastplyr_cpp_list_subset",         (DL_FUNC) &_fastplyr_cpp_list_subset,         4},
     {"_fastplyr_cpp_ncols",               (DL_FUNC) &_fastplyr_cpp_ncols,               2},
     {"_fastplyr_cpp_nrows",               (DL_FUNC) &_fastplyr_cpp_nrows,               2},
     {"_fastplyr_cpp_row_id",              (DL_FUNC) &_fastplyr_cpp_row_id,              3},
     {"_fastplyr_cpp_set_list_element",    (DL_FUNC) &_fastplyr_cpp_set_list_element,    3},
+    {"_fastplyr_cpp_set_replace",         (DL_FUNC) &_fastplyr_cpp_set_replace,         3},
     {"_fastplyr_cpp_slice_locs",          (DL_FUNC) &_fastplyr_cpp_slice_locs,          2},
     {"_fastplyr_cpp_sorted_group_starts", (DL_FUNC) &_fastplyr_cpp_sorted_group_starts, 2},
     {"_fastplyr_cpp_which_all",           (DL_FUNC) &_fastplyr_cpp_which_all,           1},
+    {"_fastplyr_r_address",               (DL_FUNC) &_fastplyr_r_address,               1},
     {NULL, NULL, 0}
 };
 }

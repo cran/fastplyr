@@ -48,35 +48,12 @@ group_data <- function(x){
     dplyr::group_data(x)
   }
 }
-# This function returns the groups of a data frame
-get_groups <- function(data, .by = NULL){
-  dplyr_groups <- group_vars(data)
-  if (rlang::quo_is_null(rlang::enquo(.by))){
-    by_groups <- NULL
-  } else {
-    by_groups <- tidy_select_names(data, {{ .by }})
-  }
-  if (length(by_groups) > 0L){
-    if (length(dplyr_groups) > 0L){
-      stop(".by cannot be used on a grouped_df")
-    }
-    by_groups
-  } else {
-    dplyr_groups
-  }
-}
-
-
 
 # df/list constructors ----------------------------------------------------
 
 # list() that removes NULL elements
 list3 <- function(...){
   list_rm_null(list(...))
-}
-# list3() but always a named list
-list_named <- function(...){
-  list_rm_null(named_dots(...))
 }
 
 # Turns df into plain df
@@ -86,9 +63,7 @@ df_as_df <- function(x){
 
 # Converts df into plain tbl
 df_as_tbl <- function(x){
-  out <- list_as_df(x)
-  class(out) <- c("tbl_df", "tbl", "data.frame")
-  out
+  `class<-`(x, c("tbl_df", "tbl", "data.frame"))
 }
 
 # list to tbl
@@ -98,45 +73,6 @@ df_as_tbl <- function(x){
 list_as_tbl <- function(x){
   df_as_tbl(list_as_df(x))
 }
-
-# Light df constructor
-# .nrows is there purely to create an (n > 0) x 0 data frame
-new_df <- function(
-    ..., .nrows = NULL,
-    .recycle = FALSE,
-    .name_repair = FALSE
-){
-
-  out <- list_named(...)
-
-  # Recycle
-  if (.recycle){
-    out <- do.call(function(...) cheapr::recycle(..., length = .nrows), out)
-  }
-
-  if (is.null(.nrows)){
-    if (length(out) == 0L){
-      row_names <- integer()
-    } else {
-      N <- NROW(.subset2(out, 1L))
-      row_names <- c(NA_integer_, -N)
-    }
-  } else {
-    row_names <- .set_row_names(.nrows)
-  }
-
-  out_names <- as.character(attr(out, "names", TRUE))
-
-  if (.name_repair){
-    out_names <- unique_name_repair(out_names)
-  }
-
-  attr(out, "names") <- out_names
-  attr(out, "row.names") <- row_names
-  class(out) <- "data.frame"
-  out
-}
-
 
 # df manipulation helpers -------------------------------------------------
 
@@ -151,6 +87,17 @@ df_row_slice <- function(data, i, reconstruct = TRUE){
 df_add_cols <- function(data, cols){
   dplyr::dplyr_col_modify(data, cols)
 }
+
+# df_add_cols2 <- function(data, cols, check = TRUE){
+#   if (check){
+#     if ( (!(is.list(cols) && !is.object(cols))) || is.null(names(cols))){
+#       stop("cols must be a named list")
+#     }
+#     cols <- do.call(function(...) cheapr::recycle(..., length = df_nrow(data)), cols)
+#   }
+#   cpp_df_add_cols(data, cols)
+# }
+
 df_rm_cols <- function(data, .cols){
   cols_to_remove <- col_select_names(data, .cols = .cols)
   dplyr::dplyr_col_modify(data, add_names(vector("list", length(cols_to_remove)),
@@ -188,7 +135,7 @@ df_rep_each <- function(data, each){
 df_ungroup <- function(data){
   if (inherits(data, "grouped_df")){
     attr(data, "groups") <- NULL
-    class(data) <- c("tbl_df", "tbl", "data.frame")
+    class(data) <- fast_setdiff(class(data), "grouped_df")
   }
   data
 }
@@ -207,7 +154,7 @@ df_paste_names <- function(data,  sep = "_", .cols = names(data)){
 df_init <- function(x, size = 1L){
   ncols <- df_ncol(x)
   if (ncols == 0){
-    init_df <- new_df(.nrows = size)
+    init_df <- cheapr::new_df(.nrows = size)
   } else {
     init_df <- list_as_df(lapply(x, na_init, size))
   }
@@ -230,7 +177,7 @@ df_group_id <- function(x){
 # Fast/efficient drop empty rows
 df_drop_empty <- function(data, .cols = names(data)){
   is_empty_row <- cheapr::row_all_na(cheapr::sset(data, j = .cols))
-  which_not_empty <- which(is_empty_row, invert = TRUE)
+  which_not_empty <- cheapr::which_(is_empty_row, invert = TRUE)
   if (length(which_not_empty) == df_nrow(data)){
     data
   } else {
@@ -246,11 +193,12 @@ df_count <- function(.data, name = "n", weights = NULL){
     if (length(weights) != df_nrow(.data)){
       stop("Weights must satisfy `length(weights) == nrow(.data)`")
     }
-    counts <- collapse::fsum(weights, g = df_group_id(.data), use.g.names = FALSE)
+    counts <- collapse::fsum(as.double(weights), g = df_group_id(.data),
+                             use.g.names = FALSE, na.rm = TRUE)
   } else {
     counts <- cheapr::lengths_(groups[[".rows"]])
   }
-  out <- f_select(groups, .cols = setdiff(names(groups), ".rows"))
+  out <- f_select(groups, .cols = fast_setdiff(names(groups), ".rows"))
   out[[name]] <- counts
   out
 }
@@ -261,7 +209,8 @@ df_add_count <- function(.data, name = "n", weights = NULL){
     if (length(weights) != df_nrow(.data)){
       stop("Weights must satisfy `length(weights) == nrow(.data)`")
     }
-    counts <- collapse::fsum(weights, g = group_ids, TRA = "replace_fill")
+    counts <- collapse::fsum(as.double(weights), g = group_ids,
+                             TRA = "replace_fill", na.rm = TRUE)
   } else {
     counts <- cheapr::lengths_(groups[[".rows"]])[group_ids]
   }

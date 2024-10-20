@@ -1,9 +1,14 @@
 #include "fastplyr.h"
 
-SEXP cpp_r_obj_address(SEXP x) {
+SEXP r_obj_address(SEXP x) {
   static char buf[1000];
   snprintf(buf, 1000, "%p", (void*) x);
   return Rf_mkChar(buf);
+}
+
+[[cpp11::register]]
+SEXP r_address(SEXP x){
+  return Rf_ScalarString(r_obj_address(x));
 }
 
 // Compare the addresses between 2 similar lists
@@ -20,7 +25,7 @@ SEXP cpp_address_equal(SEXP x, SEXP y) {
   SEXP out = Rf_protect(Rf_allocVector(LGLSXP, n1));
   int *p_out = LOGICAL(out);
   for (int i = 0; i < n1; ++i) {
-    p_out[i] = (cpp_r_obj_address(p_x[i]) == cpp_r_obj_address(p_y[i]));
+    p_out[i] = (r_obj_address(p_x[i]) == r_obj_address(p_y[i]));
   }
   Rf_unprotect(1);
   return out;
@@ -555,8 +560,22 @@ SEXP cpp_run_id(SEXP x){
     break;
   }
   case REALSXP: {
+    if (Rf_inherits(x, "integer64")){
     long long *p_x = INTEGER64_PTR(x);
     FP_RUN_ID;
+  } else {
+    // The above statement works almost always for
+    // doubles, except for +0.0 == -0.0
+    bool diff;
+    double *p_x = REAL(x);
+    for (R_xlen_t i = 1; i < n; ++i){
+      diff = !(
+        ((p_x[i] != p_x[i]) && (p_x[i - 1] != p_x[i - 1])) ||
+          (p_x[i] == p_x[i - 1])
+      );
+      p_out[i] = p_out[i - 1] + diff;
+    }
+  }
     break;
   }
   case STRSXP: {
@@ -648,9 +667,19 @@ SEXP cpp_df_run_id(cpp11::writable::list x){
           break;
         }
       case REALSXP: {
+        if (Rf_inherits(x, "integer64")){
         long long *p_xj = INTEGER64_PTR(p_x[j]);
         diff = (p_xj[i] != p_xj[i - 1]);
         p_out[i] = (k += diff);
+      } else {
+        double *p_xj = REAL(p_x[j]);
+        diff = !(
+          ((p_xj[i] != p_xj[i]) && (p_xj[i - 1] != p_xj[i - 1])) ||
+            (p_xj[i] == p_xj[i - 1])
+        );
+        p_out[i] = (k += diff);
+      }
+
         break;
       }
       case STRSXP: {
@@ -698,7 +727,134 @@ SEXP cpp_consecutive_id(SEXP x){
   }
 }
 
+// x assumed to be an integer vector of unique group IDs
+
+[[cpp11::register]]
+SEXP cpp_grouped_run_id(SEXP x, SEXP order, SEXP group_sizes){
+  int n = Rf_length(x);
+  int *p_x = INTEGER(x);
+  int *p_o = INTEGER(order);
+  int *p_group_sizes = INTEGER(group_sizes);
+  if (n != Rf_length(order)){
+    Rf_error("length(order) must match length(x)");
+  }
+  SEXP out = Rf_protect(Rf_allocVector(INTSXP, n));
+  int *p_out = INTEGER(out);
+  int n_groups = Rf_length(group_sizes);
+  int k = 0;
+  int oi, oi2, group_size;
+  int total_group_size = 0;
+  for (int i = 0; i < n_groups; ++i){
+    group_size = p_group_sizes[i];
+    total_group_size += group_size;
+    if (total_group_size > n){
+      Rf_unprotect(1);
+      Rf_error("sum(group_sizes) must equal length(x)");
+    }
+    if (group_size >= 1){
+      p_out[p_o[k] - 1] = 1;
+      ++k;
+    }
+    for (int j = 1; j < group_size; ++k, ++j){
+      oi = p_o[k] - 1;
+      oi2 = p_o[k - 1] - 1;
+      p_out[oi] = p_out[oi2] + (p_x[oi] != p_x[oi2]);
+    }
+  }
+  if (total_group_size != n){
+    Rf_unprotect(1);
+    Rf_error("sum(group_sizes) must equal length(x)");
+  }
+  Rf_unprotect(1);
+  return out;
+}
+
 [[cpp11::register]]
 SEXP cpp_set_list_element(SEXP x, R_xlen_t i, SEXP value){
   return SET_VECTOR_ELT(x, i - 1, value);
 }
+
+[[cpp11::register]]
+SEXP cpp_set_replace(SEXP x, SEXP where, SEXP what){
+  if (TYPEOF(x) != TYPEOF(what)){
+    Rf_error("`typeof(x)` must match `typeof(what)`");
+  }
+  int *p_where = INTEGER(where);
+
+  long long int xn = Rf_xlength(x);
+  int n = Rf_length(where);
+  if (n != Rf_length(what)){
+    Rf_error("`length(where)` must match `length(what)`");
+  }
+  long long int xi;
+
+
+#define FASTPLYR_REPLACE                                                              \
+  for (int i = 0; i < n; ++i){                                                        \
+    xi = p_where[i];                                                                  \
+    if (xi <= 0 || xi > xn){                                                           \
+      Rf_error("where must be an integer vector of values between 1 and `length(x)`");\
+    }                                                                                 \
+    p_x[xi - 1] = p_what[i];                                                          \
+  }                                                                                   \
+
+  switch (TYPEOF(x)){
+  case NILSXP: {
+    break;
+  }
+  case LGLSXP:
+  case INTSXP: {
+    int *p_x = INTEGER(x);
+    int *p_what = INTEGER(what);
+    FASTPLYR_REPLACE
+    break;
+  }
+  case REALSXP: {
+    double *p_x = REAL(x);
+    double *p_what = REAL(what);
+    FASTPLYR_REPLACE
+    break;
+  }
+  default: {
+    Rf_error("%s cannot handle an object of type %s", __func__, Rf_type2char(TYPEOF(x)));
+  }
+  }
+  return x;
+}
+
+// Low-level add cols to data frame
+// SEXP cpp_df_add_cols(SEXP x, SEXP cols) {
+//   if (TYPEOF(cols) != VECSXP){
+//     Rf_error("cols must be a list");
+//   }
+//   R_xlen_t ncol = Rf_xlength(x);
+//   R_xlen_t out_size = ncol + Rf_xlength(cols);
+//   if (Rf_length(cols) == 0){
+//     SEXP out = Rf_protect(Rf_allocVector(VECSXP, Rf_xlength(x)));
+//     for (R_xlen_t i = 0; i < ncol; ++i){
+//       SET_VECTOR_ELT(out, i, VECTOR_ELT(x, i));
+//     }
+//     Rf_unprotect(1);
+//     return out;
+//   }
+//   SEXP col_names = Rf_protect(Rf_getAttrib(cols, R_NamesSymbol));
+//   if (Rf_isNull(col_names)){
+//     Rf_unprotect(2);
+//     Rf_error("cols must be a named list");
+//   }
+//   SEXP names = Rf_protect(Rf_getAttrib(x, R_NamesSymbol));
+//   SEXP out = Rf_protect(Rf_allocVector(VECSXP, out_size));
+//   SEXP out_names = Rf_protect(Rf_allocVector(STRSXP, out_size));
+//   for (R_xlen_t i = 0; i < ncol; ++i){
+//     SET_VECTOR_ELT(out, i, VECTOR_ELT(x, i));
+//     SET_STRING_ELT(out_names, i, STRING_ELT(names, i));
+//   }
+//   for (R_xlen_t i = ncol, j = 0; i < out_size; ++i, ++j){
+//     SET_VECTOR_ELT(out, i, VECTOR_ELT(cols, j));
+//     SET_STRING_ELT(out_names, i, STRING_ELT(col_names, j));
+//   }
+//   SHALLOW_DUPLICATE_ATTRIB(out, x);
+//   Rf_setAttrib(out, R_NamesSymbol, out_names);
+//   Rf_unprotect(4);
+//   return out;
+// }
