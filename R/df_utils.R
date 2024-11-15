@@ -51,11 +51,6 @@ group_data <- function(x){
 
 # df/list constructors ----------------------------------------------------
 
-# list() that removes NULL elements
-list3 <- function(...){
-  list_rm_null(list(...))
-}
-
 # Turns df into plain df
 df_as_df <- function(x){
   list_as_df(x)
@@ -85,8 +80,56 @@ df_row_slice <- function(data, i, reconstruct = TRUE){
   out
 }
 df_add_cols <- function(data, cols){
-  dplyr::dplyr_col_modify(data, cols)
+  reconstruct(data, dplyr::dplyr_col_modify(f_ungroup(data), cols))
 }
+
+combine <- function(...){
+  if (nargs() == 0) {
+    return(NULL)
+  }
+  dots <- list(...)
+  if (length(dots) == 1) {
+    dot <- dots[[1L]]
+    if (rlang::is_bare_list(dot)){
+      return(do.call(combine, dot))
+    }
+    else {
+      return(dot)
+    }
+  }
+
+  if (cpp_any_frames(dots)){
+    do.call(f_bind_rows, dots)
+  } else {
+    do.call(c, dots)
+  }
+}
+
+# The below is fine but doesn't work with matrix cols
+
+# df_modify_cols <- function(data, cols){
+#   if (!(is.list(cols) && !is.null(names(cols)))){
+#     stop("cols must be a named list")
+#   }
+#   N <- df_nrow(data)
+#   out <- unclass(data)
+#   temp <- unclass(cols)
+#   # temp <- do.call(function(...) cheapr::recycle(..., length = N), cols)
+#   for (col in names(temp)){
+#     # out[[col]] <- temp[[col]]
+#     vec <- temp[[col]]
+#     if (NROW(vec) != N){
+#       if (is_df(vec)){
+#         vec <- cheapr::sset(vec, rep_len(attr(x, "row.names"), N))
+#       } else {
+#         vec <- rep_len(vec, N)
+#       }
+#     }
+#     out[[col]] <- vec
+#   }
+#   class(out) <- class(data)
+#   reconstruct(data, out)
+# }
 
 # df_add_cols2 <- function(data, cols, check = TRUE){
 #   if (check){
@@ -98,11 +141,29 @@ df_add_cols <- function(data, cols){
 #   cpp_df_add_cols(data, cols)
 # }
 
-df_rm_cols <- function(data, .cols){
-  cols_to_remove <- col_select_names(data, .cols = .cols)
-  dplyr::dplyr_col_modify(data, add_names(vector("list", length(cols_to_remove)),
-                                          cols_to_remove))
+# df_rm_cols <- function(data, .cols){
+#   cols_to_remove <- col_select_names(data, .cols = .cols)
+#   dplyr::dplyr_col_modify(data, add_names(vector("list", length(cols_to_remove)),
+#                                           cols_to_remove))
+# }
+
+# This is not only faster than dplyr col modify for large data frames
+# but also works with data.tables because of reconstruct.data.table
+df_rm_cols <- function(data, cols){
+
+  # un-class to ensure no s3 methods are used below
+  out <- unclass(data)
+  rm_cols <- unname(col_select_pos(data, .cols = cols))
+
+  # Cols to remove
+  col_locs <- match(rm_cols, seq_along(out))
+  # Set them to NULL to remove
+  out[col_locs] <- NULL
+
+  class(out) <- class(data)
+  reconstruct(data, out)
 }
+
 # Seq along df rows/cols
 df_seq_along <- function(data, along = "rows"){
   switch(along,
@@ -175,13 +236,22 @@ df_group_id <- function(x){
   out
 }
 # Fast/efficient drop empty rows
-df_drop_empty <- function(data, .cols = names(data)){
-  is_empty_row <- cheapr::row_all_na(cheapr::sset(data, j = .cols))
-  which_not_empty <- cheapr::which_(is_empty_row, invert = TRUE)
-  if (length(which_not_empty) == df_nrow(data)){
+df_drop_if_all_empty <- function(data){
+  drop <- cheapr::row_all_na(data)
+  if (length(drop) == 0){
     data
   } else {
-    df_row_slice(data, which_not_empty)
+    keep <- cheapr::which_(drop, invert = TRUE)
+    df_row_slice(data, keep)
+  }
+}
+df_drop_if_any_empty <- function(data){
+  drop <- cheapr::row_any_na(data)
+  if (length(drop) == 0){
+    data
+  } else {
+    keep <- cheapr::which_(drop, invert = TRUE)
+    df_row_slice(data, keep)
   }
 }
 
@@ -246,7 +316,7 @@ unique_name_repair <- function(x, .sep = "..."){
   }
   x <- as.character(x)
   col_seq <- seq_along(x)
-  which_dup <- which(collapse::fduplicated(x, all = TRUE))
+  which_dup <- cheapr::which_(collapse::fduplicated(x, all = TRUE))
   x[which_dup] <- paste0(x[which_dup], .sep, col_seq[which_dup])
   which_empty <- cheapr::which_(nzchar(x), invert = TRUE)
   x[which_empty] <- paste0(x[which_empty], .sep, col_seq[which_empty])

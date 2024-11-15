@@ -1,20 +1,20 @@
 #include "fastplyr.h"
 
-SEXP r_obj_address(SEXP x) {
+SEXP r_address(SEXP x) {
   static char buf[1000];
   snprintf(buf, 1000, "%p", (void*) x);
   return Rf_mkChar(buf);
 }
 
 [[cpp11::register]]
-SEXP r_address(SEXP x){
-  return Rf_ScalarString(r_obj_address(x));
+SEXP cpp_r_address(SEXP x){
+  return Rf_ScalarString(r_address(x));
 }
 
 // Compare the addresses between 2 similar lists
 
 [[cpp11::register]]
-SEXP cpp_address_equal(SEXP x, SEXP y) {
+SEXP cpp_frame_addresses_equal(SEXP x, SEXP y) {
   const SEXP* p_x = VECTOR_PTR_RO(x);
   const SEXP* p_y = VECTOR_PTR_RO(y);
   int n1 = Rf_length(x);
@@ -25,7 +25,7 @@ SEXP cpp_address_equal(SEXP x, SEXP y) {
   SEXP out = Rf_protect(Rf_allocVector(LGLSXP, n1));
   int *p_out = LOGICAL(out);
   for (int i = 0; i < n1; ++i) {
-    p_out[i] = (r_obj_address(p_x[i]) == r_obj_address(p_y[i]));
+    p_out[i] = (r_address(p_x[i]) == r_address(p_y[i]));
   }
   Rf_unprotect(1);
   return out;
@@ -35,88 +35,83 @@ SEXP cpp_address_equal(SEXP x, SEXP y) {
 // nrows/ncols of a list of data frames, typically supplied through ...
 
 [[cpp11::register]]
-SEXP cpp_nrows(SEXP x, bool check_rows_equal) {
+SEXP cpp_frame_dims(SEXP x, bool check_rows_equal, bool check_cols_equal) {
   Rf_protect(x = Rf_coerceVector(x, VECSXP));
   const SEXP *p_x = VECTOR_PTR_RO(x);
   int n = Rf_length(x);
-  SEXP out = Rf_protect(Rf_allocVector(INTSXP, n));
-  int *p_out = INTEGER(out);
+  SEXP nrows = Rf_protect(Rf_allocVector(INTSXP, n));
+  int *p_nrows = INTEGER(nrows);
+  SEXP ncols = Rf_protect(Rf_allocVector(INTSXP, n));
+  int *p_ncols = INTEGER(ncols);
   if (n < 2){
     for (int i = 0; i < n; ++i) {
       if (!Rf_isFrame(p_x[i])){
-        Rf_unprotect(2);
+        Rf_unprotect(3);
         Rf_error("All inputs must be data frames");
       }
-      p_out[i] = Rf_length(Rf_getAttrib(p_x[i], R_RowNamesSymbol));
+      p_nrows[i] = Rf_length(Rf_getAttrib(p_x[i], R_RowNamesSymbol));
+      p_ncols[i] = Rf_length(p_x[i]);
     }
   } else {
+
     // First data frame
+
     if (!Rf_isFrame(p_x[0])){
-      Rf_unprotect(2);
+      Rf_unprotect(3);
       Rf_error("All inputs must be data frames");
     }
     int n_rows = Rf_length(Rf_getAttrib(p_x[0], R_RowNamesSymbol));
-    p_out[0] = n_rows;
+    int n_cols = Rf_length(p_x[0]);
+    p_nrows[0] = n_rows;
+    p_ncols[0] = n_cols;
+
     // All others
+
     for (int i = 1; i < n; ++i) {
       if (!Rf_isFrame(p_x[i])){
-        Rf_unprotect(2);
+        Rf_unprotect(3);
         Rf_error("All inputs must be data frames");
       }
-      p_out[i] = Rf_length(Rf_getAttrib(p_x[i], R_RowNamesSymbol));
-      if (check_rows_equal && p_out[i] != n_rows){
-        Rf_unprotect(2);
+      p_nrows[i] = Rf_length(Rf_getAttrib(p_x[i], R_RowNamesSymbol));
+      p_ncols[i] = Rf_length(p_x[i]);
+      if (check_rows_equal && p_nrows[i] != n_rows){
+        Rf_unprotect(3);
         Rf_error("All input data frames must have the same number of rows");
       }
-    }
-  }
-  Rf_unprotect(2);
-  return out;
-}
-
-[[cpp11::register]]
-SEXP cpp_ncols(SEXP x, bool check_cols_equal) {
-  Rf_protect(x = Rf_coerceVector(x, VECSXP));
-  const SEXP *p_x = VECTOR_PTR_RO(x);
-  int n = Rf_length(x);
-  SEXP out = Rf_protect(Rf_allocVector(INTSXP, n));
-  int *p_out = INTEGER(out);
-  if (n < 2){
-    for (int i = 0; i < n; ++i) {
-      if (!Rf_isFrame(p_x[i])){
-        Rf_unprotect(2);
-        Rf_error("All inputs must be data frames");
-      }
-      p_out[i] = Rf_length(p_x[i]);
-    }
-  } else {
-    // First data frame
-    if (!Rf_isFrame(p_x[0])){
-      Rf_unprotect(2);
-      Rf_error("All inputs must be data frames");
-    }
-    int n_cols = Rf_length(p_x[0]);
-    p_out[0] = n_cols;
-    // All others
-    for (int i = 1; i < n; ++i) {
-      if (!Rf_isFrame(p_x[i])){
-        Rf_unprotect(2);
-        Rf_error("All inputs must be data frames");
-      }
-      p_out[i] = Rf_length(p_x[i]);
-      if (check_cols_equal && p_out[i] != n_cols){
-        Rf_unprotect(2);
+      if (check_cols_equal && p_ncols[i] != n_cols){
+        Rf_unprotect(3);
         Rf_error("All input data frames must have the same number of cols");
       }
     }
   }
-  Rf_unprotect(2);
+  SEXP out = Rf_protect(Rf_allocVector(VECSXP, 2));
+  SET_VECTOR_ELT(out, 0, nrows);
+  SET_VECTOR_ELT(out, 1, ncols);
+  Rf_unprotect(4);
   return out;
 }
 
 [[cpp11::register]]
 bool cpp_is_exotic(SEXP x){
-  return Rf_isVectorList(x) || Rf_isS4(x) || !Rf_isVector(x) || Rf_inherits(x, "integer64");
+  // integer64 needs to be turned into proxy group IDs in this package
+  return !Rf_isNull(x) && (!Rf_isVectorAtomic(x) || Rf_isS4(x) || Rf_inherits(x, "integer64"));
+}
+
+
+// Are any list elements data frames?
+
+[[cpp11::register]]
+bool cpp_any_frames(SEXP x){
+  bool out = false;
+  int n_dots = Rf_length(x);
+  const SEXP *p_x = VECTOR_PTR_RO(x);
+  for (int i = 0; i < n_dots; ++i){
+    if (Rf_isFrame(p_x[i])){
+      out = true;
+      break;
+    }
+  }
+  return out;
 }
 
 // Specifically applied to a list of data frames, used in `f_bind_rows()`
@@ -727,6 +722,15 @@ SEXP cpp_consecutive_id(SEXP x){
   }
 }
 
+#define FASTPLYR_GROUP_RESET                                   \
+                                                               \
+group_size = p_group_sizes[i];                                 \
+total_group_size += group_size;                                \
+if (total_group_size > n){                                     \
+  Rf_unprotect(NP);                                            \
+  Rf_error("`sum(group_sizes)` must equal `length(x)`");       \
+}
+
 // x assumed to be an integer vector of unique group IDs
 
 [[cpp11::register]]
@@ -774,52 +778,207 @@ SEXP cpp_set_list_element(SEXP x, R_xlen_t i, SEXP value){
   return SET_VECTOR_ELT(x, i - 1, value);
 }
 
+
+// LOCF - Last-Observation-Carried-Forward
+// With a user-specified ordering and run lengths (or group sizes)
+// Given groups `g`, this will fill `NA` values using LOCF by-group
+
 [[cpp11::register]]
-SEXP cpp_set_replace(SEXP x, SEXP where, SEXP what){
-  if (TYPEOF(x) != TYPEOF(what)){
-    Rf_error("`typeof(x)` must match `typeof(what)`");
-  }
-  int *p_where = INTEGER(where);
+SEXP cpp_fill_grouped(SEXP x, SEXP order, SEXP group_sizes, double fill_limit) {
+  int n = Rf_length(x);
+  int o_size = Rf_length(order);
+  fill_limit = std::fmax(fill_limit, 0);
+  int *p_o = INTEGER(order);
+  int *p_group_sizes = INTEGER(group_sizes);
+  int n_groups = Rf_length(group_sizes);
+  int NP = 0;
+  int oi;
+  int group_size, nfill;
+  int total_group_size = 0;
+  int k = 0;
 
-  long long int xn = Rf_xlength(x);
-  int n = Rf_length(where);
-  if (n != Rf_length(what)){
-    Rf_error("`length(where)` must match `length(what)`");
-  }
-  long long int xi;
+  SEXP out;
 
-
-#define FASTPLYR_REPLACE                                                              \
-  for (int i = 0; i < n; ++i){                                                        \
-    xi = p_where[i];                                                                  \
-    if (xi <= 0 || xi > xn){                                                           \
-      Rf_error("where must be an integer vector of values between 1 and `length(x)`");\
-    }                                                                                 \
-    p_x[xi - 1] = p_what[i];                                                          \
-  }                                                                                   \
-
-  switch (TYPEOF(x)){
+  switch(TYPEOF(x)){
   case NILSXP: {
+    out = Rf_protect(R_NilValue); ++NP;
     break;
   }
   case LGLSXP:
   case INTSXP: {
+    if (o_size != n){
+    Rf_unprotect(NP);
+    Rf_error("x and order must both be the same length");
+  }
+    int last_obs;
+    out = Rf_protect(Rf_duplicate(x)); ++NP;
     int *p_x = INTEGER(x);
-    int *p_what = INTEGER(what);
-    FASTPLYR_REPLACE
+    int *p_out = INTEGER(out);
+    for (int i = 0; i < n_groups; ++i){
+      nfill = 0; // Reset fill limit
+      FASTPLYR_GROUP_RESET
+      last_obs = p_x[p_o[k] - 1];
+      for (int j = 0; j < group_size; ++k, ++j){
+        oi = p_o[k] - 1;
+        if (p_x[oi] == NA_INTEGER && nfill < fill_limit){
+          p_out[oi] = last_obs;
+          ++nfill;
+        } else {
+          last_obs = p_out[oi];
+          nfill = 0;
+        }
+      }
+    }
+    if (total_group_size != n){
+      Rf_unprotect(NP);
+      Rf_error("`sum(group_sizes)` must equal `length(x)`");
+    }
     break;
   }
   case REALSXP: {
+    if (Rf_inherits(x, "integer64")){
+    if (o_size != n){
+      Rf_unprotect(NP);
+      Rf_error("x and order must both be the same length");
+    }
+    long long int last_obs;
+    out = Rf_protect(Rf_duplicate(x)); ++NP;
+    long long int *p_x = INTEGER64_PTR(x);
+    long long int *p_out = INTEGER64_PTR(out);
+    for (int i = 0; i < n_groups; ++i){
+      nfill = 0; // Reset fill limit
+      FASTPLYR_GROUP_RESET
+      last_obs = p_x[p_o[k] - 1];
+      for (int j = 0; j < group_size; ++k, ++j){
+        oi = p_o[k] - 1;
+        if (p_x[oi] == LLONG_MIN && nfill < fill_limit){
+          p_out[oi] = last_obs;
+          ++nfill;
+        } else {
+          last_obs = p_out[oi];
+          nfill = 0;
+        }
+      }
+    }
+  } else {
+    if (o_size != n){
+      Rf_unprotect(NP);
+      Rf_error("x and order must both be the same length");
+    }
+    double last_obs;
+    out = Rf_protect(Rf_duplicate(x)); ++NP;
     double *p_x = REAL(x);
-    double *p_what = REAL(what);
-    FASTPLYR_REPLACE
+    double *p_out = REAL(out);
+    for (int i = 0; i < n_groups; ++i){
+      nfill = 0; // Reset fill limit
+      FASTPLYR_GROUP_RESET
+      last_obs = p_x[p_o[k] - 1];
+      for (int j = 0; j < group_size; ++k, ++j){
+        oi = p_o[k] - 1;
+        if (p_x[oi] != p_x[oi] && nfill < fill_limit){
+          p_out[oi] = last_obs;
+          ++nfill;
+        } else {
+          last_obs = p_out[oi];
+          nfill = 0;
+        }
+      }
+    }
+  }
+  if (total_group_size != n){
+    Rf_unprotect(NP);
+    Rf_error("`sum(group_sizes)` must equal `length(x)`");
+  }
+  break;
+  }
+  case STRSXP: {
+    if (o_size != n){
+    Rf_unprotect(NP);
+    Rf_error("x and order must both be the same length");
+  }
+    SEXP last_obs;
+    out = Rf_protect(Rf_duplicate(x)); ++NP;
+    const SEXP *p_x = STRING_PTR_RO(x);
+    const SEXP *p_out = STRING_PTR_RO(out);
+    for (int i = 0; i < n_groups; ++i){
+      nfill = 0; // Reset fill limit
+      FASTPLYR_GROUP_RESET
+      last_obs = p_x[p_o[k] - 1];
+      for (int j = 0; j < group_size; ++k, ++j){
+        oi = p_o[k] - 1;
+        if (p_x[oi] == NA_STRING && nfill < fill_limit){
+          SET_STRING_ELT(out, oi, last_obs);
+          ++nfill;
+        } else {
+          last_obs = p_out[oi];
+          nfill = 0;
+        }
+      }
+    }
+    if (total_group_size != n){
+      Rf_unprotect(NP);
+      Rf_error("`sum(group_sizes)` must equal `length(x)`");
+    }
+    break;
+  }
+    // No NA to fill here
+  case RAWSXP: {
+    out = Rf_protect(Rf_duplicate(x)); ++NP;
+    break;
+
+  }
+  case VECSXP: {
+    const SEXP *p_x = VECTOR_PTR_RO(x);
+    out = Rf_protect(Rf_allocVector(VECSXP, n)); ++NP;
+    SHALLOW_DUPLICATE_ATTRIB(out, x);
+    for (int i = 0; i < n; ++i){
+      SET_VECTOR_ELT(out, i, cpp_fill_grouped(p_x[i], order, group_sizes, fill_limit));
+    }
     break;
   }
   default: {
+    Rf_unprotect(NP);
     Rf_error("%s cannot handle an object of type %s", __func__, Rf_type2char(TYPEOF(x)));
   }
   }
-  return x;
+  Rf_unprotect(NP);
+  return out;
+}
+
+// unlist `group_data(data)$.rows` quickly
+
+[[cpp11::register]]
+SEXP cpp_unlist_group_locs(SEXP x){
+  if (!Rf_isVectorList(x)){
+   return x;
+  }
+  int n = Rf_length(x);
+  int m, k = 0;
+  const SEXP *p_x = VECTOR_PTR_RO(x);
+
+  int out_size = 0;
+
+  // Figure out unlisted length
+  for (int i = 0; i < n; ++i) out_size += Rf_length(p_x[i]);
+
+  SEXP out = Rf_protect(Rf_allocVector(INTSXP, out_size));
+  int *p_out = INTEGER(out);
+
+  for (int i = 0; i < n; k += m, ++i){
+    int *p_int = INTEGER(p_x[i]);
+    m = Rf_length(p_x[i]);
+    memcpy(&p_out[k], &p_int[0], m * sizeof(int));
+  }
+
+  // for (int i = 0; i < n; ++i){
+  //   int *p_int = INTEGER(p_x[i]);
+  //   int m = Rf_length(p_x[i]);
+  //   for (int j = 0; j < m; ++k, ++j){
+  //     p_out[k] = p_int[j];
+  //   }
+  // }
+  Rf_unprotect(1);
+  return out;
 }
 
 // Low-level add cols to data frame
@@ -858,3 +1017,75 @@ SEXP cpp_set_replace(SEXP x, SEXP where, SEXP what){
 //   Rf_unprotect(4);
 //   return out;
 // }
+
+// Taken from cheapr, will remove in future
+
+[[cpp11::register]]
+SEXP cpp_set_replace(SEXP x, SEXP where, SEXP what){
+  if (TYPEOF(x) != TYPEOF(what)){
+    Rf_error("`typeof(x)` must match `typeof(what)`");
+  }
+  int *p_where = INTEGER(where);
+
+  if (ALTREP(x)){
+    Rf_warning("Cannot update an ALTREP by reference, a copy has been made.\n\tEnsure the result is assigned to an object if used in further calculations");
+  }
+  Rf_protect(x = (ALTREP(x) ? Rf_duplicate(x) : x));
+
+  long long int xn = Rf_xlength(x);
+  int where_size = Rf_length(where);
+  int what_size = Rf_length(what);
+  if (what_size != 1 && where_size != what_size){
+    Rf_unprotect(1);
+    Rf_error("`what` must be either length 1 or `length(where)`");
+  }
+  long long int xi;
+
+
+#define FASTPLYR_REPLACE                                                                           \
+  if (what_size == 1){                                                                           \
+    for (int i = 0; i < where_size; ++i){                                                        \
+      xi = p_where[i];                                                                           \
+      if (xi <= 0 || xi > xn){                                                                   \
+        Rf_unprotect(1);                                                                         \
+        Rf_error("where must be an integer vector of values between 1 and `length(x)`");         \
+      }                                                                                          \
+      p_x[xi - 1] = p_what[0];                                                                   \
+    }                                                                                            \
+  } else {                                                                                       \
+    for (int i = 0; i < where_size; ++i){                                                        \
+      xi = p_where[i];                                                                           \
+      if (xi <= 0 || xi > xn){                                                                   \
+        Rf_unprotect(1);                                                                         \
+        Rf_error("where must be an integer vector of values between 1 and `length(x)`");         \
+      }                                                                                          \
+      p_x[xi - 1] = p_what[i];                                                                   \
+    }                                                                                            \
+  }                                                                                              \
+
+
+switch (TYPEOF(x)){
+case NILSXP: {
+  break;
+}
+case LGLSXP:
+case INTSXP: {
+  int *p_x = INTEGER(x);
+  int *p_what = INTEGER(what);
+  FASTPLYR_REPLACE
+  break;
+}
+case REALSXP: {
+  double *p_x = REAL(x);
+  double *p_what = REAL(what);
+  FASTPLYR_REPLACE
+  break;
+}
+default: {
+  Rf_unprotect(1);
+  Rf_error("%s cannot handle an object of type %s", __func__, Rf_type2char(TYPEOF(x)));
+}
+}
+  Rf_unprotect(1);
+  return x;
+}

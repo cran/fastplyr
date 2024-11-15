@@ -382,7 +382,7 @@ df_as_GRP <- function(data, return.groups = TRUE, return.order = TRUE){
   group_id <- df_group_id(data)
   gsizes <- cheapr::lengths_(gdata[[".rows"]])
   if (return.order){
-    gorder <- unlist(gdata[[".rows"]])
+    gorder <- cpp_unlist_group_locs(gdata[[".rows"]])
     sorted <- attr(gorder, "sorted")
   } else {
     gorder <- NULL
@@ -481,7 +481,7 @@ df_to_GRP <- function(data, .cols = character(0),
 
     out[["group.starts"]] <- GRP_starts(out)
 
-    if (return.groups && !all(cpp_address_equal(data, data2))){
+    if (return.groups && !all(cpp_frame_addresses_equal(data, data2))){
       if (return.groups){
         out[["groups"]] <- cheapr::sset(data, GRP_starts(out))
       }
@@ -599,6 +599,11 @@ new_GRP <- function(N.groups = NULL,
 ## Construct a grouped data frame from a GRP object
 
 construct_grouped_df <- function(data, g, group_vars){
+
+  if (is.null(g) || length(group_vars) == 0){
+    return(f_ungroup(data))
+  }
+
   groups <- GRP_groups(g)
 
   if (is.null(groups)){

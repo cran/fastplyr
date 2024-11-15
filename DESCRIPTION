@@ -1,6 +1,6 @@
 Package: fastplyr
 Title: Fast Alternatives to 'tidyverse' Functions
-Version: 0.3.0
+Version: 0.4.0
 Authors@R: 
     person("Nick", "Christofides", , "nick.christofides.r@gmail.com", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0002-9743-7342"))
@@ -18,8 +18,8 @@ Config/testthat/edition: 3
 Encoding: UTF-8
 RoxygenNote: 7.3.2
 NeedsCompilation: yes
-Packaged: 2024-10-20 22:54:43 UTC; Nmc5
+Packaged: 2024-11-15 18:17:19 UTC; Nmc5
 Author: Nick Christofides [aut, cre] (<https://orcid.org/0000-0002-9743-7342>)
 Maintainer: Nick Christofides <nick.christofides.r@gmail.com>
 Repository: CRAN
-Date/Publication: 2024-10-20 23:20:02 UTC
+Date/Publication: 2024-11-15 18:30:02 UTC

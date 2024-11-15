@@ -30,12 +30,16 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
 
   semi_or_anti <- join_type %in% c("semi", "anti")
 
+  join_cols_right <- unname(by)
+
   if (is.null(names(by))){
     join_cols_left <- by
   } else {
     join_cols_left <- names(by)
+    # Fix empty names
+    empty <- cheapr::val_find(nzchar(join_cols_left), FALSE)
+    join_cols_left[empty] <- join_cols_right[empty]
   }
-  join_cols_right <- unname(by)
 
   common_cols_left <- fast_intersect(names(x), names(y))
   common_cols_right <- fast_intersect(names(y), names(x))
@@ -115,8 +119,8 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
   exotic_non_join_cols_left <- fast_setdiff(exotic_cols_left, exotic_join_cols_left)
   exotic_non_join_cols_right <- fast_setdiff(exotic_cols_right, exotic_join_cols_right)
 
-  left <- x
-  right <- y
+  left <- f_ungroup(x)
+  right <- f_ungroup(y)
 
   for (i in seq_along(exotic_join_cols_left)){
     group_ids <- group_id(
@@ -147,8 +151,8 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
   # in left or right that collapse can't handle
   # We turn these into group IDs and then match them back at the end
 
-  # exotic_cols_left <- names(x)[!cpp_address_equal(x, left)]
-  # exotic_cols_right <- names(y)[!cpp_address_equal(y, right)]
+  # exotic_cols_left <- names(x)[!cpp_frame_addresses_equal(x, left)]
+  # exotic_cols_right <- names(y)[!cpp_frame_addresses_equal(y, right)]
 
   exotic_cols_right <- fast_setdiff(exotic_cols_right, exotic_cols_left)
 
@@ -242,7 +246,7 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
       out[[col]] <- cheapr::sset(y[[col]], matches)
     }
   }
-  out
+  reconstruct(x, out)
 }
 
 #' Fast SQL joins
