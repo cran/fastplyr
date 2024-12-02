@@ -51,11 +51,6 @@ group_data <- function(x){
 
 # df/list constructors ----------------------------------------------------
 
-# Turns df into plain df
-df_as_df <- function(x){
-  list_as_df(x)
-}
-
 # Converts df into plain tbl
 df_as_tbl <- function(x){
   `class<-`(x, c("tbl_df", "tbl", "data.frame"))
@@ -79,6 +74,17 @@ df_row_slice <- function(data, i, reconstruct = TRUE){
   }
   out
 }
+
+# Bare-bones col select
+fast_col_select <- function(data, cols){
+  list_as_df(unclass(data)[cols])
+
+}
+# Bare-bones col bind
+fast_bind_cols <- function(...){
+  list_as_df(c(...))
+}
+
 df_add_cols <- function(data, cols){
   reconstruct(data, dplyr::dplyr_col_modify(f_ungroup(data), cols))
 }
@@ -141,12 +147,6 @@ combine <- function(...){
 #   cpp_df_add_cols(data, cols)
 # }
 
-# df_rm_cols <- function(data, .cols){
-#   cols_to_remove <- col_select_names(data, .cols = .cols)
-#   dplyr::dplyr_col_modify(data, add_names(vector("list", length(cols_to_remove)),
-#                                           cols_to_remove))
-# }
-
 # This is not only faster than dplyr col modify for large data frames
 # but also works with data.tables because of reconstruct.data.table
 df_rm_cols <- function(data, cols){
@@ -155,10 +155,8 @@ df_rm_cols <- function(data, cols){
   out <- unclass(data)
   rm_cols <- unname(col_select_pos(data, .cols = cols))
 
-  # Cols to remove
-  col_locs <- match(rm_cols, seq_along(out))
   # Set them to NULL to remove
-  out[col_locs] <- NULL
+  out[rm_cols] <- NULL
 
   class(out) <- class(data)
   reconstruct(data, out)
@@ -235,28 +233,8 @@ df_group_id <- function(x){
   }
   out
 }
-# Fast/efficient drop empty rows
-df_drop_if_all_empty <- function(data){
-  drop <- cheapr::row_all_na(data)
-  if (length(drop) == 0){
-    data
-  } else {
-    keep <- cheapr::which_(drop, invert = TRUE)
-    df_row_slice(data, keep)
-  }
-}
-df_drop_if_any_empty <- function(data){
-  drop <- cheapr::row_any_na(data)
-  if (length(drop) == 0){
-    data
-  } else {
-    keep <- cheapr::which_(drop, invert = TRUE)
-    df_row_slice(data, keep)
-  }
-}
 
 # Extremely simple count functions for grouped_df
-
 df_count <- function(.data, name = "n", weights = NULL){
   groups <- group_data(.data)
   if (!is.null(weights)){
@@ -315,16 +293,23 @@ unique_name_repair <- function(x, .sep = "..."){
     return(x)
   }
   x <- as.character(x)
-  col_seq <- seq_along(x)
-  which_dup <- cheapr::which_(collapse::fduplicated(x, all = TRUE))
-  x[which_dup] <- paste0(x[which_dup], .sep, col_seq[which_dup])
-  which_empty <- cheapr::which_(nzchar(x), invert = TRUE)
-  x[which_empty] <- paste0(x[which_empty], .sep, col_seq[which_empty])
+  dup <- collapse::fduplicated(x, all = TRUE)
+  which_dup <- cheapr::val_find(dup, TRUE)
+  if (length(which_dup)){
+    x[which_dup] <- paste0(x[which_dup], .sep, which_dup)
+  }
+  which_empty <- empty_str_locs(x)
+  if (length(which_empty)){
+    x[which_empty] <- paste0(x[which_empty], .sep, which_empty)
+  }
   x
 }
 
 df_cross_join <- function(x, y, .repair_names = TRUE){
-  f_bind_cols(df_rep_each(x, df_nrow(y)), df_rep(y, df_nrow(x)), .repair_names = .repair_names)
+  f_bind_cols(
+    df_rep_each(x, df_nrow(y)), df_rep(y, df_nrow(x)),
+    .repair_names = .repair_names, .recycle = FALSE
+  )
 }
 
 cross_join2 <- function(x, y){
@@ -334,7 +319,7 @@ cross_join2 <- function(x, y){
 }
 
 cross_join <- function(...){
-  dots <- named_dots(...)
+  dots <- named_list(..., .keep_null = FALSE)
   out <- Reduce(cross_join2, unname(dots))
   if (!is_df(out)){
     out <- new_tbl(x = out)
@@ -357,6 +342,16 @@ df_mutate_exotic_to_ids <- function(x, order = TRUE, ascending = TRUE, as_qg = F
       ascending = ascending,
       as_qg = as_qg
     )
+  }
+  x
+}
+
+# Turn all list elements into data frames
+as_list_of_frames <- function(x){
+  for (i in seq_along(x)){
+    if (!inherits(x[[i]], "data.frame")){
+      x[[i]] <- list_as_tbl(x[i])
+    }
   }
   x
 }

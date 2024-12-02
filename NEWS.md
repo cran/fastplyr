@@ -1,3 +1,31 @@
+# fastplyr 0.5.0
+
+### Bug fixes
+
+- Fix for `f_summarise` returning results in the incorrect order.
+
+### Breaking changes
+
+- Previously soft-deprecated arguments have now been removed.
+
+### New features
+
+- New function `list_tidy` as an alternative to `list` that evaluates 
+arguments dynamically with a focus on setting precedence for objects created
+in the list over environment objects.
+
+- `new_tbl` now evaluates its arguments dynamically. `f_expand` also 
+evaluates its argument dynamically unless the data is grouped and the 
+expressions supplied aren't simply column selections.
+
+- New function `f_pull` as a fast convenience function for extracting 
+vectors from columns.
+
+- New functions `remove_rows_if_any_na` and `remove_rows_if_all_na`.
+
+- `f_arrange` gains the `.descending` argument to efficiently 
+return data frames in descending order.
+
 # fastplyr 0.4.0
 
 ### New features

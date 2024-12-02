@@ -1,4 +1,4 @@
-#' Fast `dplyr::select()`/`dplyr::rename()`
+#' Fast 'dplyr' `select()`/`rename()`/`pull()`
 #'
 #' @description
 #' `f_select()` operates the exact same way as `dplyr::select()` and
@@ -73,7 +73,10 @@ f_select.data.table <- function(data, ..., .cols = NULL){
   keys <- attr(data, "sorted")
   out <- collapse::qDT(out)
   if (all(keys %in% names(out))){
-    if (all(cpp_frame_addresses_equal(df_select(out, keys), df_select(data, keys)))){
+    if (all(cpp_frame_addresses_equal(
+      fast_col_select(out, keys),
+      fast_col_select(data, keys)
+    ))){
       attr(out, "sorted") <- keys
     }
   }
@@ -113,6 +116,15 @@ f_rename.data.table <- function(data, ..., .cols = NULL){
   pos <- tidy_select_pos(data, ..., .cols = .cols)
   out <- col_rename(data, .cols = pos)
   collapse::qDT(out)
+}
+#' @rdname f_select
+#' @export
+f_pull <- function(data, ..., .cols = NULL){
+  col <- tidy_select_pos(data, ..., .cols = .cols)
+  if (length(col) != 1){
+    stop("You must select exactly one column in `f_pull()`")
+  }
+  .subset2(data, col)
 }
 #' @rdname f_select
 #' @export
