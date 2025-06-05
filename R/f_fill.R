@@ -40,7 +40,7 @@ f_fill <- function(data, ..., .by = NULL, .cols = NULL,
   group_vars <- get_groups(data, .by = {{ .by }})
   groups <- f_select(data, .cols = group_vars)
   data_to_fill <- f_select(f_ungroup(data),
-                           .cols = fast_setdiff(fill_cols, group_vars))
+                           .cols = vec_setdiff(fill_cols, group_vars))
 
   if (df_ncol(groups) == 0){
     if (locf){
@@ -54,8 +54,8 @@ f_fill <- function(data, ..., .by = NULL, .cols = NULL,
     # `cpp_unlist_group_locs()` is a dedicated function to do this
     if (identical(group_vars, group_vars(data))){
       group_data <- group_data(data)
-      o <- cpp_unlist_group_locs(group_data[[".rows"]])
-      sizes <- cheapr::lengths_(group_data[[".rows"]])
+      sizes <- cheapr::list_lengths(group_data[[".rows"]])
+      o <- cpp_unlist_group_locs(group_data[[".rows"]], sizes)
     } else {
       o <- radixorderv2(groups, group.sizes = TRUE,
                         sort = FALSE, decreasing = FALSE)
@@ -68,7 +68,7 @@ f_fill <- function(data, ..., .by = NULL, .cols = NULL,
     if (!locf){
       # Reverse vector without copy (by reference)
       rev_in_place <- function(x){
-        get_from_package("cpp_rev", "cheapr")(x, set = TRUE)
+        cheapr_cpp_rev(x, set = TRUE)
       }
       o <- rev_in_place(o)
       sizes <- rev_in_place(sizes)
@@ -79,5 +79,5 @@ f_fill <- function(data, ..., .by = NULL, .cols = NULL,
 
   new_fill_names <- across_col_names(fill_cols, .fns = "", .names = .new_names)
   names(data_to_fill) <- new_fill_names
-  df_add_cols(data, data_to_fill)
+  cheapr::df_modify(data, data_to_fill)
 }

@@ -13,10 +13,9 @@
 #' The naming convention of this column follows `dplyr::add_count()`.
 #' @param .drop_empty If `TRUE` then empty rows with all `NA` values are removed.
 #' The default is `FALSE`.
-#' @param .sort Should result be sorted?
-#' If `FALSE` (the default), then rows are returned in the exact same order as
-#' they appear in the data.
-#' If `TRUE` then the duplicate rows are sorted.
+#' @param .sort `r lifecycle::badge("deprecated")`  Use `.order` instead.
+#' @param .order Should the groups be calculated as ordered groups?
+#' Setting to `TRUE` here implies that the groups are returned sorted.
 #' @param .by (Optional). A selection of columns to group by for this operation.
 #' Columns are specified using tidy-select.
 #' @param .cols (Optional) alternative to `...` that accepts
@@ -29,77 +28,64 @@
 #' @details
 #' This function works like `dplyr::distinct()` in its handling of
 #' arguments and data-masking but returns duplicate rows.
-#' In certain situations in can be much faster than `data %>% group_by() %>% filter(n() > 1)`
+#' In certain situations in can be much faster than `data |> group_by()|> filter(n() > 1)`
 #' when there are many groups.
 #'
 #' @seealso [f_count] [f_distinct]
 #'
-#' @rdname duplicate_rows
+#' @rdname f_duplicates
 #' @export
 f_duplicates <- function(data, ..., .keep_all = FALSE,
                          .both_ways = FALSE, .add_count = FALSE,
                          .drop_empty = FALSE,
-                         .sort = FALSE,
+                         .order = FALSE,
+                         .sort = deprecated(),
                          .by = NULL, .cols = NULL){
-  n_dots <- dots_length(...)
-  group_info <- tidy_group_info(data, ..., .by = {{ .by }},
-                                .cols = .cols,
-                                ungroup = TRUE,
-                                rename = TRUE)
-  all_groups <- group_info[["all_groups"]]
-  out <- group_info[["data"]]
-  out_nms <- names(out)
-  # If no variables selected then all variables used
-  if (n_dots == 0 && is.null(.cols)){
-    dup_vars <- out_nms
-    out_vars <- dup_vars
-  } else {
-    dup_vars <- all_groups
-    if (.keep_all){
-      out_vars <- out_nms
-    } else {
-      out_vars <- dup_vars
-    }
+  if (lifecycle::is_present(.sort)) {
+    lifecycle::deprecate_warn("0.9.0", "f_duplicates(.sort = )", "f_duplicates(.order = )")
+    .order <- .sort
   }
-  if (length(group_info[["extra_groups"]]) == 0L && !group_info[["groups_changed"]]){
-    out <- data
+  if (dots_length(...) == 0 && is.null(.cols)){
+    .cols <- names(data)
   }
-  out <- f_select(out, .cols = out_vars)
+  group_info <- tidy_eval_groups(
+    data, ..., .by = {{ .by }}, .cols = .cols,
+    .order = .order
+  )
+  out <- group_info[[1L]]
+  GRP <- group_info[[2L]]
 
-  # Groups
-  groups <- df_to_GRP(out, .cols = dup_vars,
-                      return.order = .sort,
-                      return.groups = FALSE,
-                      order = .sort)
+  dup_vars <- GRP_group_vars(GRP)
+
+  if (!.keep_all){
+    out <- cheapr::sset_col(out, dup_vars)
+  }
   if (.add_count){
-    group_sizes <- GRP_expanded_group_sizes(groups)
-    n_var_nm <- unique_count_col(out)
-    out[[n_var_nm]] <- group_sizes
+    group_sizes <- GRP_expanded_group_sizes(GRP)
+    count_col <- unique_count_col(out)
+    out <- cheapr::df_modify(out, list_tidy(!!count_col := group_sizes))
   }
-  which_dup <- GRP_which_duplicated(groups, all = .both_ways)
+  which_dup <- GRP_which_duplicated(GRP, all = .both_ways)
 
-  if (.sort){
-    which_dup <- which_dup[order(GRP_group_id(groups)[which_dup])]
+  # Neat way to return sorted duplicate rows
+
+  if (.order){
+    which_dup <- which_dup[order(GRP_group_id(GRP)[which_dup])]
   }
-  out <- cheapr::sset(out, which_dup)
+  out <- cheapr::sset_row(out, which_dup)
 
   # Remove empty rows (rows with all NA values)
 
   if (.drop_empty){
-    out <- remove_rows_if_all_na(f_select(out, .cols = dup_vars))
+    out <- remove_rows_if_all_na(cheapr::sset_col(out, dup_vars))
   }
 
   # Adjust group sizes as they reflect the dup count + 1
 
-  if (.add_count && !.both_ways && df_nrow(out) > 0){
-    cheapr::set_subtract(out[[n_var_nm]], 1L)
-    which_zero <- cheapr::which_val(out[[n_var_nm]], 0L)
-    collapse::setv(
-      out[[n_var_nm]],
-      which_zero,
-      1L,
-      vind1 = TRUE
-    )
+  if (.add_count && !.both_ways){
+    cheapr::set_subtract(out[[count_col]], 1L)
+    which_zero <- cheapr::which_val(out[[count_col]], 0L)
+    cpp_loc_set_replace(out[[count_col]], which_zero, 1L)
   }
-  reconstruct(data, out)
+  cheapr::rebuild(out, data)
 }

@@ -7,11 +7,9 @@
 #' @param ... Variables used to find distinct rows.
 #' @param .keep_all If `TRUE` then all columns of data frame are kept,
 #' default is `FALSE`.
-#' @param .sort Should result be sorted? Default is `FALSE`.
-#' When `order = FALSE` this option has no effect on the result.
+#' @param .sort `r lifecycle::badge("deprecated")`  Use `.order` instead.
 #' @param .order Should the groups be calculated as ordered groups?
-#' Setting to `TRUE` may sometimes offer a speed benefit, but usually this
-#' is not the case. The default is `FALSE`.
+#' Setting to `TRUE` here implies that the groups are returned sorted.
 #' @param .by (Optional). A selection of columns to group by for this operation.
 #' Columns are specified using tidy-select.
 #' @param .cols (Optional) alternative to `...` that accepts
@@ -23,64 +21,61 @@
 #'
 #' @export
 f_distinct <- function(data, ..., .keep_all = FALSE,
-                       .sort = FALSE, .order = .sort,
+                       .order = FALSE,
+                       .sort = deprecated(),
                        .by = NULL, .cols = NULL){
-  n_dots <- dots_length(...)
-  group_info <- tidy_group_info(data, ..., .by = {{ .by }},
-                                .cols = .cols,
-                                ungroup = TRUE,
-                                rename = TRUE)
-  all_groups <- group_info[["all_groups"]]
-  out <- group_info[["data"]]
-  if (n_dots == 0 && is.null(.cols)){
-    dup_vars <- names(out)
-    out_vars <- dup_vars
+
+  if (lifecycle::is_present(.sort)) {
+    lifecycle::deprecate_warn("0.9.0", "f_distinct(.sort = )", "f_distinct(.order = )")
+    .order <- .sort
+  }
+
+  if (dots_length(...) == 0 && is.null(.cols)){
+    .cols <- names(data)
+  }
+  group_info <- tidy_eval_groups(
+    data, ..., .by = {{ .by }},
+    .cols = .cols, .order = .order
+  )
+  data <- group_info[[1L]]
+  GRP <- group_info[[2L]]
+
+  if (.keep_all){
+    distinct_locs <- GRP_starts(GRP)
+    N <- df_nrow(data)
+    n_distinct_locs <- length(distinct_locs)
+    if (.order){
+      slice <- !(N == n_distinct_locs &&
+                   isTRUE(attr(GRP[["order"]], "sorted")))
+    } else {
+      slice <- !(N == n_distinct_locs)
+    }
+    if (slice){
+
+      # 1. Choose all cols in the data
+      # not already covered by the user's chosen cols
+      # 2. Filter on unique locations
+      # 3. bind this onto the unique data containing the rest of the columns
+      # 4. Re-order the columns as needed
+      out <- cheapr::sset_col(
+        f_bind_cols(
+          cheapr::sset_row(
+            cheapr::sset_col(data, vec_setdiff(names(data), GRP_group_vars(GRP))),
+            distinct_locs
+          ),
+          GRP_groups(GRP)
+        ),
+        names(data)
+      )
+    } else {
+      out <- data
+    }
   } else {
-    dup_vars <- all_groups
-    if (.keep_all){
-      out_vars <- names(out)
-    } else {
-      out_vars <- dup_vars
-    }
+    out <- GRP_groups(GRP)
   }
-  no_new_groups <- rlang::quo_is_null(rlang::enquo(.by)) &&
-    !group_info[["groups_changed"]] &&
-    identical(group_info[["dplyr_groups"]], dup_vars)
-
-  # If distinct variables are the same as group variables..
-
-  if (no_new_groups && .sort == .order && .order == df_group_by_order_default(data)){
-    group_data <- group_data(data)
-    if (.keep_all){
-      unique_locs <- GRP_loc_starts(group_data(data)[[".rows"]])
-      slice <- !(length(unique_locs) == df_nrow(out))
-    } else {
-      slice <- FALSE
-      out <- f_select(group_data, .cols = dup_vars)
-    }
+  if (identical(names(out), group_vars(data))){
+    cheapr::rebuild(out, f_ungroup(data))
   } else {
-    out <- f_select(out, .cols = out_vars)
-    out_to_dedup <- f_select(out, .cols = dup_vars)
-    # Using sort algorithm but returning order-of-first appearance groups
-
-    if (.order && !.sort){
-      unique_locs <- cheapr::which_val(row_id(out_to_dedup), 1L)
-      slice <- !(length(unique_locs) == df_nrow(out) && is_sorted(unique_locs))
-    } else {
-      if (.order && .sort){
-        o <- radixorderv2(out_to_dedup, starts = TRUE)
-        unique_locs <- o[attr(o, "starts")]
-        slice <- !(length(unique_locs) == df_nrow(out) &&
-                     isTRUE(attr(o, "sorted")))
-      } else {
-        groups <- group3(out_to_dedup, starts = TRUE)
-        unique_locs <- attr(groups, "starts")
-        slice <- !(length(unique_locs) == df_nrow(out))
-      }
-    }
+    cheapr::rebuild(out, data)
   }
-  if (slice){
-    out <- cheapr::sset(out, unique_locs)
-  }
-  reconstruct(data, out)
 }

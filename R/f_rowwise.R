@@ -29,14 +29,14 @@ f_rowwise <- function(data, ..., .ascending = TRUE,
   row_id_nm <- names(out)[length(names(out))]
   groups <- as_tbl(
     f_select(
-      df_ungroup(out),
+      cpp_ungroup(out),
       .cols = c(rowwise_cols, row_id_nm)
     )
   )
 
   if (!.ascending){
     rev_seq <- seq(from = df_nrow(out), by = -1L, length.out = df_nrow(out))
-    groups <- df_row_slice(groups, rev_seq)
+    groups <- cheapr::sset_df(groups, rev_seq)
     row_ids <- as.list(rev_seq)
   } else {
     row_ids <- as.list(df_seq_along(out))

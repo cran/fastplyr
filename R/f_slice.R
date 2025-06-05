@@ -57,50 +57,39 @@
 #' @rdname f_slice
 #' @export
 f_slice <- function(data, i = 0L, ..., .by = NULL,
-                    .order = df_group_by_order_default(data),
+                    .order = group_by_order_default(data),
                     keep_order = FALSE){
   rlang::check_dots_empty0(...)
   if (is.logical(i)){
-    stop("i must be an integer vector, not a logical vector, use `f_filter()` instead")
+    cli::cli_abort("{.arg i} must be an {.cls integer} vector, not a {.cls logical} vector, use {.fn f_filter} instead")
   }
-  if (length(i) == 0L){
-    i <- 0L
-  }
-  i <- as.integer(i)
-  N <- df_nrow(data)
-
-  rng <- collapse::frange(i, na.rm = TRUE)
-  rng_sum <- sum(sign(rng))
-  if (abs(rng_sum) != 2){
-    if (!any(rng == 0)){
-      stop("Can't mix negative and positive locations")
-    }
-  }
-  slice_sign <- sign(rng_sum)
 
   # Groups
 
   group_vars <- get_groups(data, .by = {{ .by }})
 
+  N <- df_nrow(data)
+
   if (length(group_vars) == 0L){
-    if (any(abs(rng) > N)){
-      data_locs <- i[which(dplyr::between(i, -N, N))]
-    } else {
-      data_locs <- cheapr::na_rm(i)
-    }
+    data_locs <- i[cheapr::which_(i >= -N & i <= N)]
   } else {
-    groups <- data %>%
-      group_collapse(.cols = group_vars, .add = TRUE,
-                     order = .order)
+    i <- as.integer(i)
+    if (length(i) == 0L){
+      i <- 0L
+    }
+    groups <- df_collapse(data, group_vars, order = .order, size = TRUE)
     group_locs <- groups[[".loc"]]
     group_sizes <- groups[[".size"]]
     GN <- max(group_sizes)
     i <- i[which(dplyr::between(i, -GN, GN))]
 
-    if (length(i) == 1 && slice_sign >= 1){
+    if (length(i) == 1 && i >= 0){
       data_locs <- cheapr::na_rm(list_subset(group_locs, i))
     } else {
-      data_locs <- cpp_unlist_group_locs(cpp_slice_locs(group_locs, i))
+      data_locs <- cpp_unlist_group_locs(
+        cpp_slice_locs(group_locs, i),
+        NULL
+      )
     }
     if (is.null(data_locs)){
       data_locs <- integer(0)
@@ -109,12 +98,12 @@ f_slice <- function(data, i = 0L, ..., .by = NULL,
   if (keep_order){
     data_locs <- sort(data_locs)
   }
-  df_row_slice(data, data_locs)
+  cheapr::sset_df(data, data_locs)
 }
 #' @rdname f_slice
 #' @export
 f_slice_head <- function(data, n, prop, .by = NULL,
-                         .order = df_group_by_order_default(data),
+                         .order = group_by_order_default(data),
                          keep_order = FALSE){
   slice_info <- df_slice_prepare(data, n, prop,
                                  .by = {{ .by }},
@@ -138,7 +127,9 @@ f_slice_head <- function(data, n, prop, .by = NULL,
   } else {
     sequences <- sequence(slice_sizes, from = start, by = 1L)
     if (length(slice_sizes) > 1L){
-      i <- cpp_unlist_group_locs(slice_info[["rows"]])[sequences]
+      i <- cpp_unlist_group_locs(
+        slice_info[["rows"]], slice_info[["group_sizes"]]
+      )[sequences]
     } else {
       i <- sequences
     }
@@ -147,7 +138,7 @@ f_slice_head <- function(data, n, prop, .by = NULL,
     i <- sort(i)
   }
   if (slice){
-    df_row_slice(data, i)
+    cheapr::sset_df(data, i)
   } else {
     data
   }
@@ -155,7 +146,7 @@ f_slice_head <- function(data, n, prop, .by = NULL,
 #' @rdname f_slice
 #' @export
 f_slice_tail <- function(data, n, prop, .by = NULL,
-                         .order = df_group_by_order_default(data),
+                         .order = group_by_order_default(data),
                          keep_order = FALSE){
   slice_info <- df_slice_prepare(data, n, prop,
                                  .by = {{ .by }},
@@ -169,7 +160,9 @@ f_slice_tail <- function(data, n, prop, .by = NULL,
   } else {
     sequences <- sequence(slice_sizes, from = start - slice_sizes + 1L, by = 1L)
     if (length(slice_sizes) > 1L){
-      i <- cpp_unlist_group_locs(slice_info[["rows"]])[sequences]
+      i <- cpp_unlist_group_locs(
+        slice_info[["rows"]], slice_info[["group_sizes"]]
+      )[sequences]
     } else {
       i <- sequences
     }
@@ -177,27 +170,25 @@ f_slice_tail <- function(data, n, prop, .by = NULL,
   if (keep_order){
     i <- sort(i)
   }
-  df_row_slice(data, i)
+  cheapr::sset_df(data, i)
 }
 #' @rdname f_slice
 #' @export
 f_slice_min <- function(data, order_by, n, prop, .by = NULL,
                        with_ties = TRUE, na_rm = FALSE,
-                       .order = df_group_by_order_default(data),
+                       .order = group_by_order_default(data),
                        keep_order = FALSE){
   group_vars <- get_groups(data, .by = {{ .by }})
   grp_nm1 <- unique_col_name(names(data), "g")
-  out <- data %>%
-    add_group_id(.name = grp_nm1, .cols = group_vars, .order = .order) %>%
-    df_ungroup()
+  out <- data |>
+    add_group_id(.name = grp_nm1, .cols = group_vars, .order = .order) |>
+    cpp_ungroup()
 
   g1 <- out[[grp_nm1]]
-  out_info <- mutate_summary_grouped(out,
-                                     !!rlang::enquo(order_by),
-                                     .keep = "none",
-                                     .by = all_of(grp_nm1))
+  out_info <- mutate_summary(out, !!rlang::enquo(order_by), .keep = "none",
+                             .by = all_of(grp_nm1))
   out <- out_info[["data"]]
-  order_by_nm <- out_info[["cols"]]
+  order_by_nm <- out_info[["new_cols"]]
   row_nm <- unique_col_name(names(out), "row_id")
   out[[row_nm]] <- df_seq_along(out)
   g2 <- group_id(out[[order_by_nm]], order = TRUE)
@@ -228,28 +219,28 @@ f_slice_min <- function(data, order_by, n, prop, .by = NULL,
   if (keep_order){
     i <- sort(i)
   }
-  df_row_slice(data, i)
+  cheapr::sset_df(data, i)
 }
 #' @rdname f_slice
 #' @export
 f_slice_max <- function(data, order_by, n, prop, .by = NULL,
                        with_ties = TRUE, na_rm = FALSE,
-                       .order = df_group_by_order_default(data),
+                       .order = group_by_order_default(data),
                        keep_order = FALSE){
   group_vars <- get_groups(data, .by = {{ .by }})
   grp_nm1 <- unique_col_name(names(data), "g")
 
-  out <- data %>%
-    add_group_id(.name = grp_nm1, .cols = group_vars, .order = .order) %>%
-    df_ungroup()
+  out <- data |>
+    add_group_id(.name = grp_nm1, .cols = group_vars, .order = .order) |>
+    cpp_ungroup()
 
   g1 <- out[[grp_nm1]]
-  out_info <- mutate_summary_grouped(out,
-                                     !!rlang::enquo(order_by),
-                                     .keep = "none",
-                                     .by = all_of(grp_nm1))
+  out_info <- mutate_summary(out,
+                             !!rlang::enquo(order_by),
+                             .keep = "none",
+                             .by = all_of(grp_nm1))
   out <- out_info[["data"]]
-  order_by_nm <- out_info[["cols"]]
+  order_by_nm <- out_info[["new_cols"]]
   row_nm <- unique_col_name(names(out), "row_id")
   out[[row_nm]] <- df_seq_along(out)
   g2 <- group_id(out[[order_by_nm]], ascending = FALSE, order = TRUE)
@@ -280,20 +271,20 @@ f_slice_max <- function(data, order_by, n, prop, .by = NULL,
   if (keep_order){
     i <- sort(i)
   }
-  df_row_slice(data, i)
+  cheapr::sset_df(data, i)
 }
 #' @rdname f_slice
 #' @export
 f_slice_sample <- function(data, n, replace = FALSE, prop,
-                           .by = NULL, .order = df_group_by_order_default(data),
+                           .by = NULL, .order = group_by_order_default(data),
                            keep_order = FALSE,
                            weights = NULL){
   groups <- get_groups(data, .by = {{ .by }})
   has_weights <- !rlang::quo_is_null(rlang::enquo(weights))
   if (has_weights){
-    data_info  <- mutate_summary_grouped(data, !!rlang::enquo(weights))
+    data_info <- mutate_summary(data, !!rlang::enquo(weights))
     data <- data_info[["data"]]
-    weights_var <- data_info[["cols"]]
+    weights_var <- data_info[["new_cols"]]
   }
   slice_info <- df_slice_prepare(data, n, prop,
                                  .by = {{ .by }},
@@ -305,7 +296,7 @@ f_slice_sample <- function(data, n, replace = FALSE, prop,
   n_groups <- length(group_sizes)
   rows <- cheapr::new_list(n_groups)
   if (has_weights){
-    g <- cpp_df_group_indices(slice_info[["rows"]], df_nrow(data))
+    g <- cpp_group_indices(slice_info[["rows"]], df_nrow(data))
     weights <- gsplit2(data[[weights_var]], g = g)
   } else {
     weights <- NULL
@@ -316,28 +307,33 @@ f_slice_sample <- function(data, n, replace = FALSE, prop,
                             replace = replace,
                             prob = .subset2(weights, i))
   }
-  rows <- cpp_unlist_group_locs(rows)
+  rows <- cpp_unlist_group_locs(rows, slice_sizes)
   if (length(rows) > 0L){
     rows <- rows + rep.int(sorted_group_starts(group_sizes, 0L),
                            times = slice_sizes)
   }
-  i <- cpp_unlist_group_locs(slice_info[["rows"]])[rows]
+  i <- cpp_unlist_group_locs(
+    slice_info[["rows"]], group_sizes
+  )[rows]
   if (is.null(i)){
     i <- integer()
   }
   if (keep_order){
     i <- sort(i)
   }
-  df_row_slice(data, i)
+  cheapr::sset_df(data, i)
 }
+
 df_slice_prepare <- function(data, n, prop, .by = NULL,
-                             sort_groups = df_group_by_order_default(data),
+                             sort_groups = group_by_order_default(data),
                              bound_n = TRUE, default_n = 1L){
   N <- df_nrow(data)
   missing_n <- missing(n)
   missing_prop <- missing(prop)
   if (!missing_n && !missing_prop){
-    stop("Either n or prop must be supplied, not both.")
+    cli::cli_abort(
+      "Either {.arg n} or {.arg prop} must be supplied, not both"
+      )
   }
   if (missing_n && missing_prop){
     n <- default_n
@@ -352,11 +348,11 @@ df_slice_prepare <- function(data, n, prop, .by = NULL,
     type <- "prop"
   }
 
-  group_df <- group_collapse(data, .by = {{ .by }},
-                             order = sort_groups, sort = sort_groups,
-                             id = FALSE, loc = TRUE,
-                             # loc_order = FALSE,
-                             size = TRUE, start = FALSE, end = FALSE)
+  group_df <- df_collapse(data, get_groups(data, .by = {{ .by }}),
+    order = sort_groups,
+    id = FALSE, loc = TRUE,
+    size = TRUE, start = FALSE, end = FALSE
+  )
   rows <- group_df[[".loc"]]
   group_sizes <- group_df[[".size"]]
   if (type == "n"){
@@ -388,12 +384,12 @@ df_slice_prepare <- function(data, n, prop, .by = NULL,
     }
     slice_sizes <- as.integer(slice_sizes)
   }
-  keep <- cheapr::val_find(slice_sizes, 0, invert = TRUE)
-  if (length(rows) - length(keep) > 0L){
-    rows <- rows[keep]
-    group_sizes <- group_sizes[keep]
-    slice_sizes <- slice_sizes[keep]
-  }
+  # keep <- cheapr::val_find(slice_sizes, 0, invert = TRUE)
+  # if (length(rows) - length(keep) > 0L){
+  #   rows <- rows[keep]
+  #   group_sizes <- group_sizes[keep]
+  #   slice_sizes <- slice_sizes[keep]
+  # }
   list("rows" = rows,
        "group_sizes" = group_sizes,
        "slice_sizes" = slice_sizes)

@@ -11,8 +11,7 @@
 #' @param .cols (Optional) alternative to `...` that accepts
 #' a named character vector or numeric vector.
 #' If speed is an expensive resource, it is recommended to use this.
-#' @param .drop_groups `logical(1)` Should groups be dropped after calculation?
-#' Default is `TRUE`.
+#' @param .drop_groups `lifecycle::badge("deprecated")`
 #' @param .order Should the groups be returned in sorted order?
 #' If `FALSE`, this will return the groups in order of first appearance,
 #' and in many cases is faster.
@@ -28,34 +27,36 @@
 #' # Normal distributed samples by group using the group value as the mean
 #' # and sqrt(groups) as the sd
 #'
-#' samples <- tibble(groups) %>%
-#'   reframe(x = rnorm(100, mean = groups, sd = sqrt(groups)), .by = groups) %>%
+#' samples <- tibble(groups) |>
+#'   reframe(x = rnorm(100, mean = groups, sd = sqrt(groups)), .by = groups) |>
 #'   f_group_by(groups)
 #'
 #' # Fast means and quantiles by group
 #'
-#' quantiles <- samples %>%
+#' quantiles <- samples |>
 #'   tidy_quantiles(x, pivot = "wide")
 #'
-#' means <- samples %>%
+#' means <- samples |>
 #'   f_summarise(mean = mean(x))
 #'
-#' means %>%
+#' means |>
 #'   f_left_join(quantiles)
 #' @export
 tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
                            type = 7, pivot = c("long", "wide"),
                            na.rm = TRUE,
                            .by = NULL, .cols = NULL,
-                           .order = df_group_by_order_default(data),
-                           .drop_groups = TRUE){
+                           .order = group_by_order_default(data),
+                           .drop_groups = deprecated()){
   pivot <- rlang::arg_match(pivot)
   wide <- pivot == "wide"
-  group_info <- tidy_group_info(
-    data, ..., .by = {{ .by }}, .cols = .cols, ungroup = TRUE
+  group_info <- tidy_dots_info(
+    data, ..., .by = {{ .by }}, .cols = .cols, .order = .order
   )
-  group_vars <- group_info[["dplyr_groups"]]
-  dot_vars <- group_info[["extra_groups"]]
+  data2 <- group_info[["data"]]
+  group_vars <- group_info[["all_groups"]]
+  dot_vars <- group_info[["new_cols"]]
+  groups <- group_info[["GRP"]]
 
   # Constructing quantile info
   quant_probs <- as.double(probs)
@@ -71,10 +72,17 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
     levels = collapse::funique(quant_nms), class = "factor"
   )
 
-  data2 <- group_info[["data"]]
-  groups <- df_to_GRP(data2, .cols = group_vars, order = .order)
-  n_groups <- GRP_n_groups(groups)
-  group_starts <- GRP_starts(groups)
+  if (is.null(groups)){
+    n_groups <- 1L
+    group_starts <- min(1L, df_nrow(data2))
+    group_ids <- integer(df_nrow(data2))
+  } else {
+    n_groups <- GRP_n_groups(groups)
+    group_starts <- GRP_starts(groups)
+    group_ids <- GRP_group_id(groups)
+  }
+
+
   data2 <- f_select(data2, .cols = c(group_vars, dot_vars))
 
   ## Handle edge-cases
@@ -87,8 +95,8 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
       )
     names(empty_quant_df) <- quant_nms
     empty_quant_df <- as.data.frame(empty_quant_df)
-    out <- f_bind_cols(f_select(data2, .cols = group_vars), empty_quant_df)
-    return(reconstruct(data, out))
+    out <- f_bind_cols(cheapr::sset_col(data2, group_vars), empty_quant_df)
+    return(cheapr::rebuild(out, data))
   }
   if (df_nrow(data) == 0L || n_probs == 0L){
     if (wide){
@@ -104,26 +112,17 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
                                    quant_nms, sep = "_")
       }
       prob_df <- as.data.frame(prob_df)
-      out <- f_bind_cols(f_select(data2, .cols = group_vars), prob_df)
+      out <- f_bind_cols(cheapr::sset_col(data2, group_vars), prob_df)
     } else {
       out <- f_bind_cols(
-        f_select(data2, .cols = group_vars),
+        cheapr::sset_col(data2, group_vars),
         cheapr::new_df(
           .quantile = quant_categories[0]
         ),
-        f_select(data2, .cols = dot_vars)
+        cheapr::sset_col(data2, dot_vars)
       )
     }
-    return(reconstruct(data, out))
-  }
-
-  ### Do this because if groups is a GRP then collapse::fnth allocates
-  ### more memory than needed in the special case of <= 1 groups
-
-  if (n_groups <= 1){
-    collapse_groups <- NULL
-  } else {
-    collapse_groups <- groups
+    return(cheapr::rebuild(out, data))
   }
 
   ## Make sure double vectors are atomic doubles
@@ -149,22 +148,22 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
           )
         )
     }
-    out <- list_as_df(out)
+    out <- cheapr::list_as_df(out)
     if (wide){
-      out[[".temp.fastplyr.group.id"]] <- 0L
+      out <- df_add_col(out, ".temp.fastplyr.group.id", 0L)
       out <- collapse::pivot(
         out, how = "wider", values = dot_vars,
         names = ".quantile", sort = FALSE
       )
-      out[[".temp.fastplyr.group.id"]] <- NULL
+      out <- df_rm_cols(out, ".temp.fastplyr.group.id")
     }
   } else if (wide){
 
     # Grouped method for pivot == "wide"
 
-    out <- df_row_slice(f_select(data2, .cols = group_vars), group_starts)
+    out <- cheapr::sset_row(cheapr::sset_col(data2, group_vars), group_starts)
     # Allocate enough space
-    out <- c(as.list(out), vector("list", length(dot_vars) * n_probs))
+    out <- cheapr::list_combine(out, cheapr::new_list(length(dot_vars) * n_probs))
     if (length(dot_vars) == 1){
       names(out) <- c(group_vars, quant_nms)
     } else {
@@ -178,7 +177,7 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
       # This makes repetitive calls much faster
       o <- radixorderv2(
         cheapr::new_df(
-          g1 = GRP_group_id(groups),
+          g1 = group_ids,
           g2 = data2[[.col]]
         )
       )
@@ -187,21 +186,21 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
           sample_quantiles <-
             as.double(
               collapse::fmin(
-                data2[[.col]], g = collapse_groups, na.rm = na.rm, use.g.names = FALSE
+                data2[[.col]], g = groups, na.rm = na.rm, use.g.names = FALSE
               )
             )
         } else if (p == 1) {
           sample_quantiles <-
             as.double(
               collapse::fmax(
-                data2[[.col]], g = collapse_groups, na.rm = na.rm, use.g.names = FALSE
+                data2[[.col]], g = groups, na.rm = na.rm, use.g.names = FALSE
               )
             )
         } else if (p > 0 && p < 1) {
           sample_quantiles <-
             as.double(
               collapse::fnth(
-                data2[[.col]], n = p, g = collapse_groups, na.rm = na.rm,
+                data2[[.col]], n = p, g = groups, na.rm = na.rm,
                 use.g.names = FALSE, ties = quant_ties,
                 o = o, check.o = FALSE
               )
@@ -211,7 +210,7 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
         k <- k + 1L
       }
     }
-    out <- list_as_df(out)
+    out <- cheapr::list_as_df(out)
   } else {
 
     # Grouped method for pivot == "long"
@@ -220,18 +219,18 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
     ## Shaping the data
     ## We want it sorted by group + quantile
 
-    out <- df_row_slice(data2, group_starts)
-    out <- df_rep_each(out, n_probs)
+    out <- cheapr::sset_row(data2, group_starts)
+    out <- cheapr::cheapr_rep_each(out, n_probs)
     out[[".quantile"]] <- rep(quant_categories, df_nrow(out) / n_probs)
-    out <- f_select(out, .cols = c(group_vars, ".quantile", dot_vars))
+    out <- cheapr::sset_col(out, c(group_vars, ".quantile", dot_vars))
 
     ## We make sure all output quantile cols are double vectors
     ## Because later we use a low-level function for replacing
     ## values by reference
 
     if (length(dot_vars) > 0) {
-      out <- dplyr::mutate(
-        out, dplyr::across(dplyr::all_of(dot_vars), as.double)
+      out <- f_mutate(
+        out, across(all_of(dot_vars), as.double)
       )
     }
     quant_starts <- ( n_probs * (seq_len(n_groups) - 1L) ) + 1L
@@ -243,10 +242,13 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
       # This makes repetitive calls much faster
       o <- radixorderv2(
         cheapr::new_df(
-          g1 = GRP_group_id(groups),
+          g1 = group_ids,
           g2 = data2[[.col]]
         )
       )
+
+      # Replace values in-place
+      # this is fine because out is a fresh data because we called `sset_df()`
 
       for (p in quant_probs) {
         p_seq <- quant_starts + k
@@ -256,7 +258,7 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
             out[[.col]], p_seq,
             as.double(
               collapse::fmin(
-                data2[[.col]], g = collapse_groups, na.rm = na.rm,
+                data2[[.col]], g = groups, na.rm = na.rm,
                 use.g.names = FALSE
               )
             )
@@ -266,7 +268,7 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
             out[[.col]], p_seq,
             as.double(
               collapse::fmax(
-                data2[[.col]], g = collapse_groups, na.rm = na.rm,
+                data2[[.col]], g = groups, na.rm = na.rm,
                 use.g.names = FALSE
               )
             )
@@ -276,7 +278,7 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
             out[[.col]], p_seq,
             as.double(
               collapse::fnth(
-                data2[[.col]], n = p, g = collapse_groups, na.rm = na.rm,
+                data2[[.col]], n = p, g = groups, na.rm = na.rm,
                 use.g.names = FALSE, ties = quant_ties,
                 o = o, check.o = FALSE
               )
@@ -287,9 +289,9 @@ tidy_quantiles <- function(data, ..., probs = seq(0, 1, 0.25),
     }
   }
 
-  if (.drop_groups){
-    reconstruct(df_ungroup(data), out)
+  if (wide){
+    cheapr::rebuild(out, cpp_ungroup(data))
   } else {
-    reconstruct(data, out)
+    cheapr::rebuild(out, data)
   }
 }

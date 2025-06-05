@@ -74,13 +74,12 @@ group_id.default <- function(x, order = TRUE, ascending = TRUE, as_qg = FALSE){
     )
   }
 
-  if (!as_qg && ascending && is_atomic_vec(x)){
+  if (!as_qg && ascending && cpp_is_simple_atomic_vec(x)){
     out <- collapse::qG(x, sort = order, na.exclude = FALSE)
-    set_rm_attributes(out)
-    return(out)
+    return(cheapr::attrs_rm(out, .set = TRUE))
   }
 
-  g <- GRP2(df_ungroup(x),
+  g <- GRP2(cpp_ungroup(x),
             sort = order,
             decreasing = !ascending,
             na.last = TRUE,
@@ -97,6 +96,7 @@ group_id.default <- function(x, order = TRUE, ascending = TRUE, as_qg = FALSE){
   }
   out
 }
+
 #' @export
 group_id.factor <- function(x, order = TRUE, ascending = TRUE, as_qg = FALSE){
   out <- unclass(x)
@@ -179,7 +179,7 @@ group_id.GRP <- function(x, order = TRUE, ascending = TRUE, as_qg = FALSE){
 #' @export
 group_id.vctrs_rcrd <- function(x, order = TRUE, ascending = TRUE, as_qg = FALSE){
   group_id(
-    list_as_df(x),
+    cheapr::list_as_df(x),
     order = order,
     ascending = ascending,
     as_qg = as_qg
@@ -194,6 +194,15 @@ group_id.NULL <- function(x, order = TRUE, ascending = TRUE, as_qg = FALSE){
 group_id.integer64 <- function(x, order = TRUE, ascending = TRUE, as_qg = FALSE){
   group_id(
     cpp_int64_to_numeric(x),
+    order = order,
+    ascending = ascending,
+    as_qg = as_qg
+  )
+}
+#' @export
+group_id.time_interval <- function(x, order = TRUE, ascending = TRUE, as_qg = FALSE){
+  group_id(
+    unclass(x),
     order = order,
     ascending = ascending,
     as_qg = as_qg

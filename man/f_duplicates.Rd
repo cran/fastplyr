@@ -11,7 +11,8 @@ f_duplicates(
   .both_ways = FALSE,
   .add_count = FALSE,
   .drop_empty = FALSE,
-  .sort = FALSE,
+  .order = FALSE,
+  .sort = deprecated(),
   .by = NULL,
   .cols = NULL
 )
@@ -36,10 +37,10 @@ The naming convention of this column follows \code{dplyr::add_count()}.}
 \item{.drop_empty}{If \code{TRUE} then empty rows with all \code{NA} values are removed.
 The default is \code{FALSE}.}
 
-\item{.sort}{Should result be sorted?
-If \code{FALSE} (the default), then rows are returned in the exact same order as
-they appear in the data.
-If \code{TRUE} then the duplicate rows are sorted.}
+\item{.order}{Should the groups be calculated as ordered groups?
+Setting to \code{TRUE} here implies that the groups are returned sorted.}
+
+\item{.sort}{\ifelse{html}{\href{https://lifecycle.r-lib.org/articles/stages.html#deprecated}{\figure{lifecycle-deprecated.svg}{options: alt='[Deprecated]'}}}{\strong{[Deprecated]}}  Use \code{.order} instead.}
 
 \item{.by}{(Optional). A selection of columns to group by for this operation.
 Columns are specified using tidy-select.}
@@ -57,7 +58,7 @@ Find duplicate rows
 \details{
 This function works like \code{dplyr::distinct()} in its handling of
 arguments and data-masking but returns duplicate rows.
-In certain situations in can be much faster than \code{data \%>\% group_by() \%>\% filter(n() > 1)}
+In certain situations in can be much faster than \code{data |> group_by()|> filter(n() > 1)}
 when there are many groups.
 }
 \seealso{

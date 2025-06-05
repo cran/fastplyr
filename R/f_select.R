@@ -25,61 +25,59 @@ f_select <- function(data, ..., .cols = NULL){
 #' @export
 f_select.data.frame <- function(data, ..., .cols = NULL){
   pos <- tidy_select_pos(data, ..., .cols = .cols)
-  out <- df_select(data, pos)
+  out <- cheapr::sset_df(data, j = pos)
   names(out) <- names(pos)
   out
 }
 #' @export
 f_select.grouped_df <- function(data, ..., .cols = NULL){
-  data_nms <- names(data)
   group_vars <- group_vars(data)
-  pos <- tidy_select_pos(data, ..., .cols = .cols)
-  group_pos <- add_names(match(group_vars, data_nms), group_vars)
-  pos_nms <- names(pos)
-  # Add group vars missed
-  groups_missed <- group_pos[match(group_pos, pos, 0L) == 0L]
-  if (length(groups_missed) > 0L){
-    text1 <- "Adding missing grouping variables: "
-    message(
-      paste0(text1,
-             "'", paste(data_nms[groups_missed],
-                        collapse = "', '"), "'")
-    )
-    pos <- c(groups_missed, pos)
-    names(pos) <- c(data_nms[groups_missed], pos_nms)
-  }
-  renamed_groups <- pos[pos %in% group_pos &
-                          !names(pos) %in% names(group_pos)]
-  if (length(renamed_groups) > 0L){
-    original_nms <- data_nms[unname(renamed_groups)]
+  group_data <- group_data(data)
 
-    names(attr(data, "groups"))[
-      match(original_nms,
-            names(attr(data, "groups")))] <- names(renamed_groups)
+  cols <- tidy_select_names(data, ..., .cols = .cols)
+
+  missed_groups <- vec_setdiff(group_vars, cols)
+
+  if (length(missed_groups) > 0){
+    missed_groups_msg <- paste(missed_groups, collapse = ", ")
+    cli::cli_inform(c("i" = "Adding missed group variables:", "{missed_groups_msg}"))
+    cols <- c(`names<-`(missed_groups, missed_groups), cols)
   }
-  groups <- group_data(data)
-  out <- cheapr::sset(df_ungroup(data), j = unname(pos))
-  names(out) <- names(pos)
-  attr(out, "groups") <- groups
-  class(out) <- class(data)
-  # class(out) <- c("grouped_df", "tbl_df", "tbl", "data.frame")
+
+  out <- cheapr::sset_col(data, cols)
+  names(out) <- names(cols)
+  # out <- col_rename(out, cols)
+
+  # If any groups have been renamed then rename the group data
+  selected_group_vars <- vec_intersect(cols, group_vars)
+  if (any(names(selected_group_vars) != selected_group_vars)){
+    group_data <- col_rename(group_data, selected_group_vars)
+    attr(out, "groups") <- group_data
+  }
+  out <- cheapr::rebuild(out, cpp_ungroup(data))
+  attr(out, "groups") <- group_data
+  class(out) <- c("grouped_df", class(out))
   out
 }
 #' @export
-f_select.data.table <- function(data, ..., .cols = NULL){
-  pos <- tidy_select_pos(data, ..., .cols = .cols)
-  out <- df_select(data, pos)
-  names(out) <- names(pos)
-  keys <- attr(data, "sorted")
-  out <- collapse::qDT(out)
-  if (all(keys %in% names(out))){
-    if (all(cpp_frame_addresses_equal(
-      fast_col_select(out, keys),
-      fast_col_select(data, keys)
-    ))){
-      attr(out, "sorted") <- keys
-    }
+f_select.fastplyr_grouped_df <- function(data, ..., .cols = NULL){
+  out <- NextMethod("f_select")
+  GRP <- attr(data, "GRP")
+
+  # Have groups been renamed?
+
+  group_vars <- f_group_vars(out)
+  grp_group_vars <- GRP_group_vars(GRP)
+  renamed <- !is.null(grp_group_vars) && !identical(grp_group_vars, group_vars)
+
+  if (renamed){
+   GRP[["group.vars"]] <- group_vars
+   grp_groups <- GRP_groups(GRP)
+   names(grp_groups) <- group_vars
+   GRP[["groups"]] <- grp_groups
   }
+
+  attr(out, "GRP") <- GRP
   out
 }
 #' @rdname f_select
@@ -90,39 +88,55 @@ f_rename <- function(data, ..., .cols = NULL){
 #' @export
 f_rename.data.frame <- function(data, ..., .cols = NULL){
   pos <- tidy_select_pos(data, ..., .cols = .cols)
-  col_rename(data, .cols = pos)
+  out <- col_rename(data, .cols = pos)
+  cheapr::rebuild(out, data)
 }
 #' @export
 f_rename.grouped_df <- function(data, ..., .cols = NULL){
-  pos <- tidy_select_pos(data, ..., .cols = .cols)
-  groups <- group_data(data)
-  group_vars <- setdiff(names(groups), ".rows")
-  # Rename data columns
-  out <- col_rename(df_ungroup(data), .cols = pos)
-  # Rename group data columns
-  group_pos <- which(group_vars %in% names(data)[pos])
-  names(group_pos) <- names(out)[which(names(out) %in% names(pos) &
-                                          names(data) %in% group_vars)]
-  groups <- col_rename(groups, .cols = group_pos)
-  attr(out, "groups") <- groups
-  class(out) <- class(data)
-  # class(out) <- c("grouped_df", "tbl_df", "tbl", "data.frame")
+  group_vars <- group_vars(data)
+  group_data <- group_data(data)
+
+  cols <- tidy_select_names(data, ..., .cols = .cols)
+  renamed_group_vars <- vec_intersect(cols, group_vars)
+
+  out <- col_rename(cpp_ungroup(data), cols)
+
+  if (length(renamed_group_vars) > 0L){
+    group_data <- col_rename(group_data, renamed_group_vars)
+    attr(out, "groups") <- group_data
+  }
+  out <- cheapr::rebuild(out, cpp_ungroup(data))
+  attr(out, "groups") <- group_data
+  class(out) <- c("grouped_df", class(out))
   out
 }
-# This should be unecessary but data.table:::`names<-.data.table`
-# Sometimes reduces the allocated column slots
 #' @export
-f_rename.data.table <- function(data, ..., .cols = NULL){
-  pos <- tidy_select_pos(data, ..., .cols = .cols)
-  out <- col_rename(data, .cols = pos)
-  collapse::qDT(out)
+f_rename.fastplyr_grouped_df <- function(data, ..., .cols = NULL){
+  out <- NextMethod("f_rename")
+  GRP <- attr(data, "GRP")
+
+  # Have groups been renamed?
+
+  group_vars <- f_group_vars(out)
+  grp_group_vars <- GRP_group_vars(GRP)
+  renamed <- !is.null(grp_group_vars) && !identical(grp_group_vars, group_vars)
+
+  if (renamed){
+    GRP[["group.vars"]] <- group_vars
+    grp_groups <- GRP_groups(GRP)
+    names(grp_groups) <- group_vars
+    GRP[["groups"]] <- grp_groups
+  }
+
+  attr(out, "GRP") <- GRP
+  out
 }
 #' @rdname f_select
 #' @export
 f_pull <- function(data, ..., .cols = NULL){
   col <- tidy_select_pos(data, ..., .cols = .cols)
   if (length(col) != 1){
-    stop("You must select exactly one column in `f_pull()`")
+    cli::cli_abort("You must select exactly one column")
   }
   .subset2(data, col)
 }

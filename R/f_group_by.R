@@ -88,45 +88,30 @@
 #' @export
 #'
 f_group_by <- function(data, ..., .add = FALSE,
-                       .order = df_group_by_order_default(data),
+                       .order = group_by_order_default(data),
                        .by = NULL, .cols = NULL,
                        .drop = df_group_by_drop_default(data)){
   init_group_vars <- group_vars(data)
-  group_info <- tidy_group_info(
-    df_ungroup(data), ...,
+  group_info <- tidy_eval_groups(
+    cpp_ungroup(data), ...,
     .by = {{ .by }},
     .cols = .cols,
-    ungroup = TRUE,
-    rename = TRUE
+    .order = .order,
+    return_order = .order
   )
-  out <- group_info[["data"]]
-  groups <- group_info[["all_groups"]]
+  out <- group_info[[1L]]
+  GRP <- group_info[[2L]]
+  groups <- GRP_group_vars(GRP)
   if (.add){
-    order_unchanged <- .order == df_group_by_order_default(data)
+    order_unchanged <- .order == group_by_order_default(data)
     drop_unchanged <- .drop == df_group_by_drop_default(data)
-    no_extra_groups <- length(groups) == 0 || (length(setdiff(groups, init_group_vars)) == 0)
-    groups_unchanged <- all(group_info$address_equal[init_group_vars])
-    if (order_unchanged && drop_unchanged && no_extra_groups && groups_unchanged){
+    no_extra_groups <- length(groups) == 0 || (length(vec_setdiff(groups, init_group_vars)) == 0)
+    if (order_unchanged && drop_unchanged && no_extra_groups){
       return(data)
     }
-    groups <- unique(c(init_group_vars, groups))
+    GRP <- df_to_GRP(out, c(init_group_vars, groups), order = .order)
   }
-  if (length(groups) > 0L){
-    groups <- group_collapse(out, .cols = groups,
-                             order = .order,
-                             id = FALSE,
-                             loc = TRUE, sort = TRUE,
-                             size = FALSE,
-                             start = FALSE, end = FALSE,
-                             .drop = .drop)
-    groups <- f_rename(groups, .cols = c(".rows" = ".loc"))
-    groups[[".rows"]] <- vctrs_new_list_of(groups[[".rows"]], integer())
-    attr(groups, ".drop") <- .drop
-    attr(groups, "ordered") <- .order
-    attr(out, "groups") <- groups
-    class(out) <- c("grouped_df", "tbl_df", "tbl", "data.frame")
-  }
-  out
+  construct_fastplyr_grouped_df(out, GRP, drop = .drop)
 }
 #' @rdname f_group_by
 #' @export
@@ -135,4 +120,4 @@ group_ordered <- function(data){
 }
 #' @rdname f_group_by
 #' @export
-f_ungroup <- df_ungroup
+f_ungroup <- cpp_ungroup

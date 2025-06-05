@@ -1,33 +1,8 @@
-reconstruct <- function(template, data, copy_extra_attributes = TRUE){
-  UseMethod("reconstruct")
-}
-#' @export
-reconstruct.data.frame <- function(template, data, copy_extra_attributes = TRUE){
-  if (!is_df(data)){
-    stop("data must be a data.frame")
-  }
-  ad <- attributes(data)
-  at <- attributes(template)
-  at[["names"]] <- names(data)
-  at[["row.names"]] <- .row_names_info(data, type = 0L)
 
-  # If we're not copying all attributes
-  # then remove them
-  if (!copy_extra_attributes){
-    at[fast_setdiff(names(at), c("names", "row.names", "class"))] <- NULL
-  }
-  attributes(data) <- at
-  data
-}
-#' @export
-reconstruct.grouped_df <- function(template, data, copy_extra_attributes = TRUE){
-  if (!is_df(data)){
-    stop("data must be a data.frame")
-  }
-  ad <- attributes(data)
-  at <- attributes(template)
-  at[["names"]] <- names(data)
-  at[["row.names"]] <- .row_names_info(data, type = 0L)
+#' @exportS3Method cheapr::rebuild
+rebuild.grouped_df <- function(x, template, ...){
+
+  plain_tbl <- fast_tbl()
 
   template_groups <- group_vars(template)
 
@@ -36,62 +11,73 @@ reconstruct.grouped_df <- function(template, data, copy_extra_attributes = TRUE)
   # are identical to those in data, then no need to recalculate
 
   groups_are_identical <-
-    all(template_groups %in% names(data)) &&
-    identical(
-      strip_attrs(as.list(cheapr::sset(data, j = template_groups))),
-      strip_attrs(as.list(cheapr::sset(template, j = template_groups)))
-    )
+    all(template_groups %in% names(x)) &&
+    datasets_identical(x, template, template_groups)
 
-  if (!groups_are_identical){
-    out_groups <- fast_intersect(template_groups, names(data))
+  if (groups_are_identical){
+    groups <- attr(template, "groups")
+    out_class <- class(template)
+  } else {
+    out_groups <- vec_intersect(template_groups, names(x))
     if (length(out_groups) == 0L){
-      at[["class"]] <- fast_setdiff(at[["class"]], "grouped_df")
-      at[["groups"]] <- NULL
+      groups <- NULL
+      out_class <- cheapr::val_rm(class(template), "grouped_df")
     } else {
-      drop_by_default <- df_group_by_drop_default(template)
-      order <- df_group_by_order_default(template)
-      ordered <- attr(at[["groups"]], "ordered")
-      groups <- group_collapse(df_ungroup(data),
-                               .cols = out_groups,
-                               sort = TRUE,
-                               order = order,
-                               id = FALSE, start = FALSE,
-                               end = FALSE, size = FALSE,
-                               loc = TRUE,
-                               .drop = drop_by_default)
-      groups <- f_rename(groups, .cols = c(".rows" = ".loc"))
-      attributes(groups[[".rows"]]) <- attributes(at[["groups"]][[".rows"]])
-      for (a in fast_setdiff(names(attributes(groups)),
-                         c("row.names", "class", "names"))){
-        attr(groups, a) <- NULL
-      }
-      attr(groups, "ordered") <- ordered
-      class(groups) <- c("tbl_df", "tbl", "data.frame")
-      attr(groups, ".drop") <- drop_by_default
-      at[["groups"]] <- groups
+      drop <- df_group_by_drop_default(template)
+      GRP <- df_to_GRP(f_ungroup(x), out_groups, order = TRUE)
+      groups <- construct_dplyr_group_data(GRP, drop = drop)
+      out_class <- class(template)
     }
   }
-  if (!copy_extra_attributes){
-    at[fast_setdiff(names(at), c("names", "row.names", "class", "groups"))] <- NULL
-  }
-  attributes(data) <- at
-  data
+  out <- cheapr::rebuild(x, cpp_ungroup(template))
+  attr(out, "groups") <- groups
+  class(out) <- out_class
+  out
 }
-#' @export
-reconstruct.data.table <- function(template, data, copy_extra_attributes = TRUE){
-  if (!is_df(data)){
-    stop("data must be a data.frame")
-  }
-  ad <- attributes(data)
-  at <- attributes(template)
-  row_names <- .row_names_info(data, type = 0L)
-  out <- collapse::qDT(data)
-  out <- add_attr(out, "row.names", row_names, set = TRUE)
-  if (copy_extra_attributes){
-    for (a in fast_setdiff(names(at),
-                      c("row.names", "names", "class", "sorted", ".internal.selfref"))){
-      out <- add_attr(out, a, at[[a]], set = TRUE)
+
+
+#' @exportS3Method cheapr::rebuild
+rebuild.fastplyr_grouped_df <- function(x, template, ...){
+
+  plain_tbl <- fast_tbl()
+
+  template_groups <- group_vars(template)
+
+  # If groups in template are all in data AND
+  # the data relating to groups in template
+  # are identical to those in data, then no need to recalculate
+
+  groups_are_identical <-
+    all(template_groups %in% names(x)) &&
+    datasets_identical(x, template, template_groups)
+
+  if (groups_are_identical){
+    groups <- attr(template, "groups")
+    GRP <- attr(template, "GRP")
+    out_class <- class(template)
+  } else {
+    out_groups <- vec_intersect(template_groups, names(x))
+    if (length(out_groups) == 0L){
+      groups <- NULL
+      GRP <- NULL
+      out_class <- vec_setdiff(class(template), c("grouped_df", "fastplyr_grouped_df"))
+    } else {
+      drop <- df_group_by_drop_default(template)
+      order <- group_by_order_default(template)
+      ordered <- attr(attr(template, "groups"), "ordered")
+      GRP <- df_to_GRP(f_ungroup(x), out_groups, order = order)
+      groups <- construct_fastplyr_group_data(GRP, drop = drop)
+      out_class <- class(template)
     }
   }
-  add_attr(out, "sorted", attr(data, "sorted"), set = TRUE)
+  out <- cheapr::rebuild(x, cpp_ungroup(template))
+  attr(out, "groups") <- groups
+  attr(out, "GRP") <- GRP
+  class(out) <- out_class
+  out
+}
+
+#' @exportS3Method dplyr::dplyr_reconstruct
+dplyr_reconstruct.fastplyr_grouped_df <- function(data, template){
+  cheapr::rebuild(data, template)
 }

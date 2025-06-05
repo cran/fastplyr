@@ -3,7 +3,7 @@
 #' @description Like `dplyr::summarise()` but with some internal optimisations
 #' for common statistical functions.
 #'
-#' @param data A data frame.
+#' @param .data A data frame.
 #' @param ... Name-value pairs of summary functions. Expressions with
 #' `across()` are also accepted.
 #' @param .by (Optional). A selection of columns to group by for this operation.
@@ -11,17 +11,32 @@
 #' @param .order Should the groups be returned in sorted order?
 #' If `FALSE`, this will return the groups in order of first appearance,
 #' and in many cases is faster.
-#' @param .optimise (Optionally) turn off optimisations for common statistical
-#' functions by setting to `FALSE`. Default is `TRUE` which uses optimisations.
 #'
 #' @seealso [tidy_quantiles]
 #'
 #' @returns
 #' An un-grouped data frame of summaries by group.
 #'
-#' @details
-#' `f_summarise` behaves mostly like `dplyr::summarise` except that expressions
-#' supplied to `...` are evaluated independently.
+#' @section Details:
+#'
+#' fastplyr data-masking functions like `f_mutate` and `f_summarise` operate
+#' very similarly to their dplyr counterparts but with some crucial
+#' differences.
+#' Optimisations for by-group operations kick in for
+#' common statistical functions which are detailed below.
+#' A message will be printed which one can disable
+#' by running `options(fastplyr.inform = FALSE)`.
+#' When this happens, the expressions which become optimised no longer
+#' obey data-masking rules pertaining to sequential and dependent expression
+#' execution.
+#' For example,
+#' the pseudo code
+#'  `f_summarise(data, mean = mean(x), mean2 = round(mean), .by = g)`
+#' when optimised will not work because the named col `mean` will not be visible
+#' in later expressions.
+#'
+#' One can disable fastplyr optimisations
+#' globally by running `options(fastplyr.optimise = F)`.
 #'
 #' ### Optimised statistical functions
 #'
@@ -31,9 +46,15 @@
 #' For fast quantiles (percentiles) by group, see [tidy_quantiles]
 #'
 #'
-#' List of currently optimised functions and their equivalent
-#' 'collapse' function
+#' List of currently optimised functions
 #'
+#' `dplyr::n` -> <custom_expression> \cr
+#' `dplyr::row_number` -> <custom_expression> (only for `f_mutate`) \cr
+#' `dplyr::cur_group` -> <custom_expression> \cr
+#' `dplyr::cur_group_id` -> <custom_expression> \cr
+#' `dplyr::cur_group_rows` -> <custom_expression> (only for `f_mutate`) \cr
+#' `dplyr::lag` -> <custom_expression> (only for `f_mutate`) \cr
+#' `dplyr::lead` -> <custom_expression> (only for `f_mutate`) \cr
 #' `base::sum` -> `collapse::fsum` \cr
 #' `base::prod` -> `collapse::fprod` \cr
 #' `base::min` -> `collapse::fmin` \cr
@@ -49,282 +70,85 @@
 #' @examples
 #' library(fastplyr)
 #' library(nycflights13)
-#'
+#' library(dplyr)
+#' options(fastplyr.inform = FALSE)
 #' # Number of flights per month, including first and last day
-#' flights %>%
-#'   f_group_by(year, month) %>%
+#' flights |>
+#'   f_group_by(year, month) |>
 #'   f_summarise(first_day = first(day),
 #'               last_day = last(day),
 #'               num_flights = n())
 #'
 #' ## Fast mean summary using `across()`
 #'
-#' flights %>%
+#' flights |>
 #'   f_summarise(
-#'     across(where(is.double), mean),
+#'     across(where(is.numeric), mean),
 #'     .by = tailnum
 #'   )
 #'
-#' # To ignore or keep NAs, use collapse::set_collapse(na.rm)
-#' collapse::set_collapse(na.rm = FALSE)
-#' flights %>%
+#' flights |>
+#'   f_group_by(.cols = "tailnum") |>
 #'   f_summarise(
-#'     across(where(is.double), mean),
-#'     .by = origin
+#'     across(where(is.numeric), mean)
 #'   )
-#' collapse::set_collapse(na.rm = TRUE)
 #' @rdname f_summarise
 #' @export
-f_summarise <- function(data, ..., .by = NULL,
-                        .order = df_group_by_order_default(data),
-                        .optimise = TRUE){
-  base_fns <- c("sum", "prod", "mean", "median", "min", "max", "first", "last",
-                "sd", "var", "n_distinct", "ndistinct")
-  collapse_fns <- paste0("f", base_fns)
-  collapse_fns[base_fns == "n_distinct"] <- "fndistinct"
-  optimised_fns <- c(base_fns, collapse_fns)
-
-  temp_data <- data
-
-  group_vars <- get_groups(temp_data, {{ .by }})
-
-  # Groups for collapse functions
-  no_groups <- length(group_vars) == 0
-  if (no_groups){
-    groups <- NULL
+f_summarise <- function(.data, ..., .by = NULL, .order = group_by_order_default(.data)){
+  all_groups <- get_groups(.data, .by = {{ .by }})
+  if (length(all_groups) == 0L){
+    GRP <- NULL
+    group_keys <- f_group_keys(.data)
   } else {
-    groups <- df_to_GRP(
-      temp_data, .cols = group_vars,
-      order = .order,
-      return.groups = TRUE, return.order = FALSE
-    )
+    GRP <- df_to_GRP(.data, all_groups, order = .order)
+    group_keys <- GRP_groups(GRP)
+  }
+  quos <- fastplyr_quos(..., .data = .data, .groups = GRP,
+                        .drop_null = TRUE,
+                        .unpack_default = TRUE,
+                        .optimise = should_optimise(GRP))
+  if (df_nrow(.data) == 0){
+    group_keys <- cheapr::sset_df(group_keys, 0L)
   }
 
-  ## Flag so that we only construct grouped_df if we need to and do it once
-  grouped_df_has_been_constructed <- FALSE
-
-  dots <- rlang::enquos(...)
-  dot_nms <- names(dots)
-
-  is_n_call <- function(x) {
-    rlang::quo_is_call(x, "n", ns = c("", "dplyr"))
+  if (length(quos) == 0){
+    return(cheapr::rebuild(group_keys, cpp_ungroup(.data)))
   }
-  is_optimised_call <- function(x) {
-    rlang::quo_is_call(x, optimised_fns, ns = c("", "base", "collapse", "dplyr"))
+  ## The `recycle` argument won't have a visible effect
+  # on the final result, but it's faster to
+  # set as TRUE as it means the group keys only get recycled once internally
+  # and recycling between results shouldn't happen as they should all be
+  # of equal length
+  results <- eval_all_tidy(.data, quos, recycle = TRUE)
+  groups <- results[["groups"]]
+  results <- results[["results"]]
+
+  result_sizes <- cheapr::list_lengths(results)
+  if (any(result_sizes != df_nrow(group_keys))){
+    cli::cli_abort(c("All expressions should return results of length 1 per-group",
+                     "Use {.run f_reframe()} instead"))
   }
-  is_across_call <- function(x) {
-    rlang::quo_is_call(x, "across", ns = c("", "dplyr"))
-  }
-  if (is.null(groups[["groups"]])){
-    out <- cheapr::sset(df_ungroup(temp_data), min(1L, df_nrow(temp_data)), j = group_vars)
-  } else {
-    out <- groups[["groups"]]
-  }
-  out <- reconstruct(new_tbl(), out)
-  for (i in seq_along(dots)){
-    dot <- dots[[i]]
-    dot_label <- rlang::as_label(dot)
-    dot_env <- rlang::quo_get_env(dot)
-    dot_expr <- rlang::quo_get_expr(dot)
-    dot_nm <- dot_nms[i]
+  out <- cheapr::df_modify(group_keys, results)
+  out <- cheapr::sset_col(out, !duplicated(names(out), fromLast = TRUE))
 
-    if (!nzchar(dot_nm)){
-      dot_nm <- dot_label
-    }
-    if (rlang::quo_is_call(dot)){
-      dot_args <- rlang::call_args(dot)
-      if (length(dot_args) == 0){
-        var <- character()
-      } else {
-        var <- as.character(dot_args[[1]])
-      }
-    } else {
-      var <- rlang::as_label(dot_expr)
-    }
-    var_not_nested <- length(var) <= 1
-    if (.optimise && is_n_call(dot) && var_not_nested){
-      out[[dot_nm]] <- if (no_groups) df_nrow(temp_data) else GRP_group_sizes(groups)
-    } else if (.optimise && is_optimised_call(dot) && var_not_nested){
-      fun_name <- unlist(
-        stringr::str_match_all(
-          stringr::str_remove(
-            dot_label, stringr::fixed(paste0("(", var, ")"))
-          ), base_fns
-        )
-      )
-      fun_name <- collapse_fns[match(fun_name, base_fns)]
-      fun <- get_from_package(fun_name, "collapse")
-      fun_args <- dot_args[-1]
-      if (length(fun) == 1 && var %in% names(temp_data)){
-        res <- do.call(
-          fun, c(list(temp_data[[var]],
-                      g = groups,
-                      use.g.names = FALSE),
-                 fun_args),
-          envir = dot_env
-        )
-        out[[dot_nm]] <- res
-
-      } else {
-        if (!grouped_df_has_been_constructed){
-          temp_data <- construct_grouped_df(temp_data, groups, group_vars)
-        }
-        grouped_df_has_been_constructed <- TRUE
-        temp <- dplyr::summarise(temp_data, !!!dots[i])
-        out[[dot_nm]] <- f_select(temp, .cols = df_ncol(temp))
-      }
-    } else if (.optimise && is_across_call(dot)){
-      dot_args <- rlang::call_args(dot)
-      across_expr <- match.call(
-        definition = dplyr::across,
-        call = dot_expr,
-        expand.dots = FALSE,
-        envir = dot_env
-      )
-
-      if (!".cols" %in% names(across_expr)){
-        stop(".cols must be supplied in `across()`")
-      }
-      if (!".fns" %in% names(across_expr)){
-        stop(".fns must be supplied in `across()`")
-      }
-      unused_args <- setdiff(names(across_expr)[-1],
-                             c(".cols", ".fns", ".names"))
-      if (length(unused_args) > 0){
-        stop(paste("These arguments must not be used in `across()`:",
-                   paste(unused_args, collapse = ", ")))
-      }
-
-      across_vars <- across_expr[[".cols"]]
-      across_fns <- across_expr[[".fns"]]
-      across_nms <- across_expr[[".names"]]
-
-      #       ok <- vapply(eval(across_fns), is_anonymous_function, FALSE)
-      #       call_args(across_fns)
-      #       is_call(across_fns[[3]], optimised_fns, ns = c("", "base", "collapse", "dplyr"))
-
-      ## Ok... maybe we should try doing try(eval(call_args(across_fns)))
-      ## And work from there..
-
-      across_fns_as_list <- rlang::is_call(across_fns, "list")
-      vars <- names(tidyselect::eval_select(across_vars, temp_data, env = dot_env))
-
-      vars <- setdiff(vars, group_vars)
-
-      if (any(group_vars %in% vars)){
-        stop("can't supply any `group_vars(data)` as cols to `across()`")
-      }
-      if (across_fns_as_list) {
-        fns <- vapply(rlang::call_args(across_fns), rlang::as_label, "")
-        fn_names <- names(fns)
-        fn_names[fn_names == ""] <- fns[fn_names == ""]
-      } else {
-        fns <- rlang::as_label(across_fns)
-        fn_names <- fns
-      }
-      base_matches <- match(fns, base_fns)
-      collapse_matches <- match(fns, collapse_fns)
-      fast_fns <- rep_len(NA_character_, length(fns))
-      for (i in seq_along(fns)){
-        if (!is.na(base_matches[i])){
-          fast_fns[i] <- collapse_fns[base_matches[i]]
-        } else if (!is.na(collapse_matches[i])){
-          fast_fns[i] <- collapse_fns[collapse_matches[i]]
-        }
-      }
-      which_fast <- cheapr::na_find(fast_fns, invert = TRUE)
-      which_other <- cheapr::na_find(fast_fns)
-      fast_fns <- cheapr::na_rm(fast_fns)
-
-      full_res <- vector("list", length(vars) * length(fns))
-      col_matrix <- matrix(logical( length(vars) * length(fns)),
-                           nrow = length(fns),
-                           ncol = length(vars))
-      for (col in seq_along(vars)){
-        col_matrix[which_fast, col] <- TRUE
-      }
-      across_res <- fast_eval_across(temp_data, groups, vars, fast_fns, dot_env)
-
-      if (length(which_other) > 0){
-        if (!grouped_df_has_been_constructed){
-          temp_data <- construct_grouped_df(temp_data, groups, group_vars)
-        }
-        grouped_df_has_been_constructed <- TRUE
-        if (across_fns_as_list){
-          dplyr_res <- dplyr::summarise(
-            temp_data, dplyr::across(
-              dplyr::all_of(vars),
-              rlang::eval_tidy(across_fns, env = dot_env)[which_other]
-            ), .groups = "drop"
-          )
-        } else {
-          dplyr_res <- dplyr::summarise(
-            temp_data, dplyr::across(
-              dplyr::all_of(vars),
-              rlang::eval_tidy(across_fns, env = dot_env)
-            ), .groups = "drop"
-          )
-        }
-        dplyr_res <- as.list(dplyr_res)[setdiff(names(dplyr_res), group_vars)]
-        full_res[cheapr::which_(col_matrix, invert = TRUE)] <- dplyr_res
-      }
-
-
-      full_res[which(col_matrix)] <- across_res
-      out_var_names <- across_col_names(vars, fn_names, across_nms)
-      names(full_res) <- out_var_names
-
-      res_sizes <- cheapr::lengths_(full_res)
-      if (any(res_sizes != df_nrow(out))){
-        stop("Expressions must return exactly 1 row per `f_summarise()` group")
-      }
-      if (length(full_res) > 0){
-        out <- f_bind_cols(out, list_as_df(full_res))
-      }
-    } else {
-      if (!grouped_df_has_been_constructed){
-        temp_data <- construct_grouped_df(temp_data, groups, group_vars)
-      }
-      grouped_df_has_been_constructed <- TRUE
-      temp <- dplyr::summarise(temp_data, !!!dots[i], .groups = "drop")
-      if (df_nrow(out) != df_nrow(temp)){
-        stop("Expressions must return exactly 1 row per `f_summarise()` group")
-      }
-      out <- f_bind_cols(out, f_select(temp, .cols = setdiff(names(temp), group_vars)))
-    }
-  }
-  reconstruct(df_ungroup(data), out)
+  cheapr::rebuild(out, cpp_ungroup(.data))
 }
 #' @rdname f_summarise
 #' @export
 f_summarize <- f_summarise
 
-fast_eval_across <- function(data, g, .cols, .fns, env, .names = NULL){
-  ncols <- length(.cols)
-  nfns <- length(.fns)
-  out <- vector("list", ncols * nfns)
-  collapse_ns <- asNamespace("collapse")
-  i <- 1L
-  for (col in .cols){
-    for (f in .fns){
-     fun <- get(f, collapse_ns, inherits = FALSE)
-     var <- .subset2(data, col)
-     res <- do.call(fun, list(var, g = g, use.g.names = FALSE), envir = env)
-     if (length(var) == 0){
-       res <- cheapr::sset(res, 0)
-     }
-     out[[i]] <- res
-     i <- i + 1L
-   }
-  }
-  out
-}
-
 across_col_names <- function (.cols = NULL, .fns = NULL, .names = NULL){
   fns_null <- is.null(.fns)
   nms_null <- is.null(.names)
+
+  if (fns_null && !nms_null){
+    .fns <- ""
+    fns_null <- FALSE
+  }
+
   n_fns <- length(.fns)
   n_cols <- length(.cols)
+
 
   if (fns_null && nms_null){
     out <- as.character(.cols)
@@ -332,7 +156,9 @@ across_col_names <- function (.cols = NULL, .fns = NULL, .names = NULL){
     out <- .cols
   } else if (nms_null && n_cols == 1L) {
     out <- .fns
+    out <- cheapr::name_repair(out, empty_sep = paste0(.cols, "_"), dup_sep = "_")
   } else {
+    .fns <- cheapr::name_repair(.fns %||% "", empty_sep = "", dup_sep = "")
     out <- character(n_cols * n_fns)
     init <- 0L
     if (nms_null) {
@@ -348,14 +174,6 @@ across_col_names <- function (.cols = NULL, .fns = NULL, .names = NULL){
       }
     }
   }
-  if (anyDuplicated(out) > 0) {
-    stop("Column names must be unique")
-  }
   out
 }
-
-is_anonymous_function <- function(x){
-  is.function(x) && identical(names(attributes(x)), "srcref")
-}
-
 

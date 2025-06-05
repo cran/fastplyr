@@ -1,6 +1,6 @@
 check_suffix <- function(x){
   if (!is.character(x) || length(x) != 2){
-    stop("suffix must be a character vector of length 2")
+    cli::cli_abort("{.arg suffix} must be a {.cls character} vector of length 2")
   }
 }
 
@@ -12,20 +12,20 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
     dplyr_by <- unclass(by)
 
     if (dplyr_by$condition != "=="){
-      stop("Currently the only join condition supported is '=='")
+      cli::cli_abort("Currently the only join condition supported is '=='")
     }
     by <- add_names(dplyr_by[["y"]], dplyr_by[["x"]])
   }
 
   if (is.null(by)){
-    by <- fast_intersect(names(x), names(y))
+    by <- vec_intersect(names(x), names(y))
     if (length(by) == 0){
-      stop("No common variables, please specify variables to join on")
+      cli::cli_abort("No common variables, please specify variables to join on")
     }
   }
 
   if (length(by) == 0 && df_ncol(x) > 0 && df_ncol(y) > 0){
-    stop("Please specify variables to join on")
+    cli::cli_abort("Please specify variables to join on")
   }
 
   semi_or_anti <- join_type %in% c("semi", "anti")
@@ -41,18 +41,18 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
     join_cols_left[empty] <- join_cols_right[empty]
   }
 
-  common_cols_left <- fast_intersect(names(x), names(y))
-  common_cols_right <- fast_intersect(names(y), names(x))
+  common_cols_left <- vec_intersect(names(x), names(y))
+  common_cols_right <- vec_intersect(names(y), names(x))
 
-  unjoinable_cols <- c(fast_setdiff(join_cols_left, names(x)),
-                       fast_setdiff(join_cols_right, names(y)))
+  unjoinable_cols <- c(vec_setdiff(join_cols_left, names(x)),
+                       vec_setdiff(join_cols_right, names(y)))
 
   if (length(unjoinable_cols) > 0){
     stop(paste0("Unable to join by '", unjoinable_cols[1], "' as it does not exist"))
   }
 
-  non_joined_common_cols_left <- fast_setdiff(common_cols_left, join_cols_left)
-  non_joined_common_cols_right <- fast_setdiff(common_cols_right, join_cols_right)
+  non_joined_common_cols_left <- vec_setdiff(common_cols_left, join_cols_left)
+  non_joined_common_cols_right <- vec_setdiff(common_cols_right, join_cols_right)
 
   # Add suffixes
 
@@ -113,33 +113,34 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
   exotic_cols_left <- names(x)[vapply(x, cpp_is_exotic, FALSE, USE.NAMES = FALSE)]
   exotic_cols_right <- names(y)[vapply(y, cpp_is_exotic, FALSE, USE.NAMES = FALSE)]
 
-  exotic_join_cols_left <- fast_intersect(join_cols_left, exotic_cols_left)
-  exotic_join_cols_right <- fast_intersect(join_cols_right, exotic_cols_right)
+  exotic_join_cols <- join_by[join_cols_right %in% exotic_cols_right | join_cols_left %in% exotic_cols_left]
+  exotic_join_cols_left <- names(exotic_join_cols)
+  exotic_join_cols_right <- unname(exotic_join_cols)
 
-  exotic_non_join_cols_left <- fast_setdiff(exotic_cols_left, exotic_join_cols_left)
-  exotic_non_join_cols_right <- fast_setdiff(exotic_cols_right, exotic_join_cols_right)
+  exotic_non_join_cols_left <- vec_setdiff(exotic_cols_left, exotic_join_cols_left)
+  exotic_non_join_cols_right <- vec_setdiff(exotic_cols_right, exotic_join_cols_right)
 
   left <- f_ungroup(x)
   right <- f_ungroup(y)
 
-  for (i in seq_along(exotic_join_cols_left)){
-    group_ids <- group_id(
-      f_union_all(
-        left[[exotic_join_cols_left[i]]], right[[exotic_join_cols_right[i]]]
-      ),
-      order = FALSE
+  exotic_data <- cheapr::new_list(length(exotic_join_cols))
+  exotic_group_ids <- cheapr::new_list(length(exotic_join_cols))
+  names(exotic_data) <- exotic_join_cols_left
+  names(exotic_group_ids) <- exotic_join_cols_left
+
+  for (i in seq_along(exotic_join_cols)){
+    exotic_combined <- cheapr::cheapr_c(
+      left[[exotic_join_cols_left[i]]], right[[exotic_join_cols_right[i]]]
     )
+    exotic_data[[i]] <- exotic_combined
+    group_ids <- group_id(exotic_combined, order = FALSE)
+    exotic_group_ids[[i]] <- group_ids
     left[[exotic_join_cols_left[i]]] <- cheapr::sset(group_ids, df_seq_along(left))
     right[[exotic_join_cols_right[i]]] <- cheapr::sset(group_ids, (df_nrow(left) + 1L):length(group_ids))
   }
 
   # For the non joining variables, we can just convert directly to IDs
 
-  # # exotic_non_joined_cols_left <- fast_setdiff(
-  #   non_joined_cols_left[vapply(f_select(x, .cols = non_joined_cols_left), cpp_is_exotic, FALSE, USE.NAMES = FALSE)]
-  # exotic_non_join_cols_right <-
-  #   non_joined_cols_right[vapply(f_select(y, .cols = non_joined_cols_right), cpp_is_exotic, FALSE, USE.NAMES = FALSE)]
-  #
   for (col in exotic_non_join_cols_left){
     left[[col]] <- group_id(left[[col]], order = FALSE)
   }
@@ -151,24 +152,23 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
   # in left or right that collapse can't handle
   # We turn these into group IDs and then match them back at the end
 
-  # exotic_cols_left <- names(x)[!cpp_frame_addresses_equal(x, left)]
-  # exotic_cols_right <- names(y)[!cpp_frame_addresses_equal(y, right)]
-
-  exotic_cols_right <- fast_setdiff(exotic_cols_right, exotic_cols_left)
+  exotic_cols_right <- vec_setdiff(exotic_cols_right, exotic_cols_left)
 
   # Join
 
   if (join_type == "anti"){
     out <- cheapr::sset(
       left, which_not_in(
-        f_select(left, .cols = join_cols_left),
-        f_select(right, .cols = join_cols_right))
+        cheapr::sset_col(left, join_cols_left),
+        cheapr::sset_col(right, join_cols_right)
+      )
     )
   } else if (join_type == "semi"){
     out <- cheapr::sset(
       left, which_in(
-        f_select(left, .cols = join_cols_left),
-        f_select(right, .cols = join_cols_right))
+        cheapr::sset_col(left, join_cols_left),
+        cheapr::sset_col(right, join_cols_right)
+      )
     )
   } else {
     out <- collapse::join(
@@ -205,8 +205,8 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
         }
       } else if (join_type == "right"){
         na_locs <- which_not_in(
-          f_select(out, .cols = join_cols_left),
-          f_select(left, .cols = join_cols_left)
+          cheapr::sset_col(out, join_cols_left),
+          cheapr::sset_col(left, join_cols_left)
         )
         for (col in join_cols_left){
           out[[col]][na_locs] <- NA
@@ -217,8 +217,8 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
           f_select(right, .cols = add_names(join_cols_right, join_cols_left))
         )
         na_locs_left <- which_not_in(
-          f_select(out, .cols = join_cols_left),
-          f_select(left, .cols = join_cols_left)
+          cheapr::sset_col(out, join_cols_left),
+          cheapr::sset_col(left, join_cols_left)
         )
         for (col in join_cols_right){
           out[[col]][na_locs_right] <- NA
@@ -230,23 +230,32 @@ f_join <- function(x, y, by, suffix, multiple, keep, join_type, ...){
         which_na <- integer()
       }
     } else {
-      out_nms <- c(names(left), fast_setdiff(names(right), join_cols_right))
+      out_nms <- c(names(left), vec_setdiff(names(right), join_cols_right))
     }
-    out <- f_select(out, .cols = out_nms)
+    out <- cheapr::sset_col(out, out_nms)
   }
   # Match group IDs back to original variables
 
-  for (col in exotic_cols_left){
+  for (col in exotic_non_join_cols_left){
     matches <- collapse::fmatch(out[[col]], left[[col]], overid = 2L)
     out[[col]] <- cheapr::sset(x[[col]], matches)
   }
+  for (col in exotic_join_cols_left){
+    matches <- collapse::fmatch(out[[col]], exotic_group_ids[[col]], overid = 2L)
+    out[[col]] <- cheapr::sset(exotic_data[[col]], matches)
+  }
+  for (col in vec_intersect(exotic_join_cols_right, names(out))){
+    adjacent_left_col <- exotic_join_cols_left[match(col, exotic_join_cols_right)]
+    matches <- collapse::fmatch(out[[col]], exotic_group_ids[[adjacent_left_col]], overid = 2L)
+    out[[col]] <- cheapr::sset(exotic_data[[adjacent_left_col]], matches)
+  }
   if (!semi_or_anti){
-    for (col in fast_intersect(exotic_cols_right, names(out))){
+    for (col in vec_intersect(exotic_non_join_cols_right, names(out))){
       matches <- collapse::fmatch(out[[col]], right[[col]], overid = 2L)
       out[[col]] <- cheapr::sset(y[[col]], matches)
     }
   }
-  reconstruct(x, out)
+  cheapr::rebuild(out, x)
 }
 
 #' Fast SQL joins
@@ -336,12 +345,12 @@ f_cross_join <- function(x, y, suffix = c(".x", ".y"), ...){
   check_suffix(suffix)
   names(x) <- unique_suffix_cols(names(x), names(x), suffix[1L])
   names(y) <- unique_suffix_cols(names(y), names(y), suffix[2L])
-  df_cross_join(x, y, .repair_names = FALSE)
+  cross_join2(x, y, .repair_names = FALSE)
 }
 #' @rdname join
 #' @export
 f_union_all <- function(x, y, ...){
-  if (inherits(x, "data.frame")) f_bind_rows(x, y) else c(x, y)
+  f_bind_rows(x, y, ...)
 }
 #' @rdname join
 #' @export

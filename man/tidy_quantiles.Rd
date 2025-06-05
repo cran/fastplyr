@@ -13,8 +13,8 @@ tidy_quantiles(
   na.rm = TRUE,
   .by = NULL,
   .cols = NULL,
-  .order = df_group_by_order_default(data),
-  .drop_groups = TRUE
+  .order = group_by_order_default(data),
+  .drop_groups = deprecated()
 )
 }
 \arguments{
@@ -41,8 +41,7 @@ If speed is an expensive resource, it is recommended to use this.}
 If \code{FALSE}, this will return the groups in order of first appearance,
 and in many cases is faster.}
 
-\item{.drop_groups}{\code{logical(1)} Should groups be dropped after calculation?
-Default is \code{TRUE}.}
+\item{.drop_groups}{\code{lifecycle::badge("deprecated")}}
 }
 \value{
 A data frame of sample quantiles.
@@ -58,18 +57,18 @@ groups <- 1 * 2^(0:10)
 # Normal distributed samples by group using the group value as the mean
 # and sqrt(groups) as the sd
 
-samples <- tibble(groups) \%>\%
-  reframe(x = rnorm(100, mean = groups, sd = sqrt(groups)), .by = groups) \%>\%
+samples <- tibble(groups) |>
+  reframe(x = rnorm(100, mean = groups, sd = sqrt(groups)), .by = groups) |>
   f_group_by(groups)
 
 # Fast means and quantiles by group
 
-quantiles <- samples \%>\%
+quantiles <- samples |>
   tidy_quantiles(x, pivot = "wide")
 
-means <- samples \%>\%
+means <- samples |>
   f_summarise(mean = mean(x))
 
-means \%>\%
+means |>
   f_left_join(quantiles)
 }

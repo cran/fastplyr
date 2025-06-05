@@ -26,9 +26,15 @@ f_expand <- function(data, ..., .sort = FALSE,
   check_cols(dots_length(...), .cols = .cols)
   group_vars <- get_groups(data, {{ .by }})
 
+  if (length(group_vars) == 0L){
+    GRP <- NULL
+  } else {
+    GRP <- df_to_GRP(data, group_vars, order = .sort)
+  }
+
   # If the user is simply selecting cols then we can use an optimised method
   if (is.null(.cols)){
-    dots <- rlang::enquos(...)
+    dots <- fastplyr_quos(..., .data = data, .groups = GRP)
     dot_labels <- quo_labels(dots)
     if (all(dot_labels %in% names(data)) && !any(names(dots) %in% names(data))){
       .cols <- dot_labels
@@ -36,37 +42,22 @@ f_expand <- function(data, ..., .sort = FALSE,
   }
   # Optimised method when just selecting cols
   if (!is.null(.cols)){
-    data2 <- df_ungroup(data)
+    data2 <- cpp_ungroup(data)
     dot_vars <- col_select_names(data2, .cols = .cols)
     frames <- cheapr::new_list(length(dot_vars))
     for (i in seq_along(dot_vars)){
       frames[[i]] <- sort_unique(
-        df_select(data2, c(group_vars, dot_vars[i])),
+        f_select(data2, .cols = c(group_vars, dot_vars[i])),
         sort = .sort
       )
     }
   } else {
-    # Alternative that evaluates grouped df expressions sequentially
-    # This is more correct but much slower
-    # if (length(group_vars) > 0){
-    #   return(
-    #     reconstruct(
-    #       data,
-    #       dplyr::reframe(f_group_by(data, .cols = group_vars, .add = TRUE),
-    #                      f_expand(data = pick(everything()), ..., .sort = .sort)
-    #       )
-    #     )
-    #   )
-    # }
-    # frames <- list_rm_null(eval_all_tidy_ungrouped(data, !!!dots))
-    # frames <- lapply(frames, sort_unique, .sort)
-    # frames <- unname(as_list_of_frames(frames))
-
-    frames <- list_rm_null(
-      eval_all_tidy(f_group_by(data, .cols = group_vars, .add = TRUE), !!!dots)
+    data2 <- data
+    frames <- eval_all_tidy(data2, dots, recycle = FALSE)
+    frames <- purrr::map2(
+      frames[[1L]], cpp_as_list_of_frames(frames[[2L]]),
+      \(x, y) sort_unique(cheapr::col_c(x, y), .sort)
     )
-    frames <- lapply(frames, sort_unique, .sort)
-    frames <- unname(as_list_of_frames(frames))
   }
   if (length(group_vars) > 0){
     anon_join <- function(x, y){
@@ -75,7 +66,7 @@ f_expand <- function(data, ..., .sort = FALSE,
     }
     out <- Reduce(anon_join, frames)
 
-    ## Here we remove the distinct join suffix and use unique_name_repair()
+    ## Here we remove the distinct join suffix and use cheapr::name_repair()
     ## for duplicate col names
 
     which_suffix_names <- which(grepl(".fastplyr.suffix", names(out), fixed = TRUE))
@@ -84,22 +75,19 @@ f_expand <- function(data, ..., .sort = FALSE,
            fixed = TRUE)
   } else {
     if (prod(cpp_frame_dims(frames, FALSE, FALSE)[[1L]]) > .Machine$integer.max){
-      stop("expansion results in >= 2^31 rows, please supply less data")
+      cli::cli_abort("expansion results in >= 2^31 rows, please supply less data")
     }
-    df_cj <- function(x, y){
-      df_cross_join(x, y, .repair_names = FALSE)
-    }
-    out <- Reduce(df_cj, frames)
+    out <- Reduce(cross_join2, frames)
 
     # Alternative
     # out <- do.call(cross_join, frames)
   }
-  names(out) <- unique_name_repair(names(out))
+  names(out) <- cheapr::name_repair(names(out))
   # If just empty list
-  if (length(out) == 0){
-    out <- f_distinct(data2, .cols = group_vars, .sort = .sort)
+  if (length(frames) == 0){
+    out <- f_distinct(data2, .cols = group_vars, .order = .sort)
   }
-  reconstruct(data, out)
+  cheapr::rebuild(out, data)
 }
 #' @rdname f_expand
 #' @export
@@ -112,20 +100,18 @@ f_complete <- function(data, ...,
                           .by = {{ .by }}, .cols = .cols)
   fill_na <- any(!is.na(fill))
   out <- data
-  # Full-join
+
   if (df_nrow(expanded_df) > 0 && df_ncol(expanded_df) > 0){
-    out <- f_full_join(out, expanded_df, by = names(expanded_df), sort = .sort)
+    # out <- f_full_join(out, expanded_df, by = names(expanded_df), sort = .sort)
 
     # Alternative method using essentially setdiff() + rbind()
-    # extra <- f_anti_join(expanded_df, f_select(out, .cols = names(expanded_df)))
-    # if (df_nrow(extra) > 0){
-    #   extra <- f_bind_cols(
-    #     extra,
-    #     df_init(f_select(out, .cols = setdiff(names(out), names(expanded_df))),
-    #             df_nrow(extra))
-    #   )
-    #   out <- f_bind_rows(out, extra)
-    # }
+    extra <- f_anti_join(expanded_df, f_select(out, .cols = names(expanded_df)))
+    if (df_nrow(extra) > 0){
+      out <- f_bind_rows(out, extra)
+    }
+  }
+  if (.sort){
+    out <- f_arrange(out, .cols = names(expanded_df))
   }
   # Replace NA with fill
   if (fill_na){
@@ -133,36 +119,32 @@ f_complete <- function(data, ...,
     fill_nms <- names(fill)
     for (i in seq_along(fill)){
       if (length(fill[[i]]) != 1){
-        stop("fill values must be of length 1")
+        cli::cli_abort("fill values must be of length 1")
       }
       out[[fill_nms[[i]]]][cheapr::which_na(out[[fill_nms[[i]]]])] <-
         fill[[i]]
     }
   }
-  out_order <- c(names(data), fast_setdiff(names(out), names(data)))
+  out_order <- c(names(data), vec_setdiff(names(out), names(data)))
   out <- f_select(out, .cols = out_order)
-  reconstruct(data, out)
+  cheapr::rebuild(out, data)
 }
 #' @rdname f_expand
 #' @export
 crossing <- function(..., .sort = FALSE){
-  dots <- cheapr::named_list(..., .keep_null = FALSE)
-  for (i in seq_along(dots)){
-    if (!is_df(dots[[i]])){
-      dots[[i]] <- sort_unique(`names<-`(cheapr::new_df(x = dots[[i]]), names(dots)[i]),
-                               sort = .sort)
-    }
-  }
+  dots <- list_tidy(..., .named = TRUE, .keep_null = FALSE)
+  dots <- lapply(dots, sort_unique, .sort)
   df_as_tbl(do.call(cross_join, dots))
 }
 #' @rdname f_expand
 #' @export
 nesting <- function(..., .sort = FALSE){
-  dots <- cheapr::named_list(..., .keep_null = FALSE)
-  for (i in seq_along(dots)){
-    if (!is_df(dots[[i]])){
-      dots[[i]] <- `names<-`(cheapr::new_df(x = dots[[i]]), names(dots)[i])
-    }
-  }
-  df_as_tbl(sort_unique(do.call(f_bind_cols, dots), sort = .sort))
+  df_as_tbl(
+    sort_unique(
+      cheapr::col_c(
+        .args = list_tidy(..., .named = TRUE, .keep_null = FALSE),
+        .recycle = TRUE, .name_repair = TRUE
+      ), sort = .sort
+    )
+  )
 }
